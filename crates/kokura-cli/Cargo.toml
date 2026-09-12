@@ -1,0 +1,17 @@
+[package]
+name = "kokura-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kokura-core = { path = "../kokura-core" }
+kokura-debug = { path = "../kokura-debug" }
+kokura-bridge = { path = "../kokura-bridge" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+gif = "0.13"
+image.workspace = true
+zip = "0.6"

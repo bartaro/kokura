@@ -1,0 +1,17 @@
+[package]
+name = "kokura-py"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "kokura"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3.workspace = true
+serde_json.workspace = true
+image.workspace = true
+zip = "0.6"
+kokura-core = { path = "../kokura-core" }

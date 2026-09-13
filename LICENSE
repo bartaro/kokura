@@ -40,32 +40,3 @@ distribution. Preserve it when redistributing these glyphs or conversions.
 This permission concerns the supplied sample glyphs. It does not grant
 rights in other fonts supplied by users, loaded from ROMs, or present in
 screenshots or analysis inputs and outputs.
-
-KOKURA's egui GUI uses fonts from epaint_default_fonts 0.32.3:
-
-- Hack: Copyright 2018 Source Foundry Authors, MIT; its DejaVu and
-  Bitstream Vera heritage has additional notices, including the Bitstream
-  Vera License. See licenses/fonts/epaint_default_fonts-0.32.3/Hack-Regular.txt.
-- Noto Emoji: SIL Open Font License 1.1. See the same directory's OFL.txt.
-- Ubuntu Light: Ubuntu Font Licence 1.0. See the same directory's UFL.txt.
-- emoji-icon-font: Copyright (c) 2014 John Slegers, MIT. See the same
-  directory's emoji-icon-font-mit-license.txt.
-
-The same directory includes font-copyright-records.txt transcribed from
-the shipped Noto Emoji and Ubuntu Light font metadata.
-Preserve applicable font notices when packaging
-the GUI, including when font bytes are embedded in the executable.
-
-The SDL GUI uses font8x8 0.3.1. Its Rust implementation is MIT, Copyright
-(c) 2017 Joaquin Rosales. Upstream identifies its bitmap glyphs as public
-domain and records their provenance. Full original LICENSE and README.md
-are preserved in licenses/fonts/font8x8-0.3.1/.
-
-The SDL GUI also searches for locally installed Windows fonts. These
-system fonts retain their own terms; loading them does not grant
-permission to redistribute them. KOKURA's MIT license does not relicense
-any third-party font.
-
-These notices identify font rights separately from the project code.
-They do not replace third-party licenses or add restrictions to code
-covered by the MIT License above.

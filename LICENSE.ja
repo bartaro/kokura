@@ -44,32 +44,3 @@ samples/font.chr を含む形式変換物です。
 この許諾の対象は、付属するサンプル字形です。利用者が提供する別のフォント、
 ROMから読み込むフォント、スクリーンショットや解析の入力・出力に含まれる
 別のフォントについて、権利を許諾するものではありません。
-
-KOKURAのegui GUIは、epaint_default_fonts 0.32.3のフォントを使用します。
-
-- Hack: Copyright 2018 Source Foundry Authors、MIT。
-  由来となるDejaVuおよびBitstream Veraの追加表記があり、Bitstream Vera Licenseも
-  含まれます。licenses/fonts/epaint_default_fonts-0.32.3/Hack-Regular.txt を参照してください。
-- Noto Emoji: SIL Open Font License 1.1。同じディレクトリの OFL.txt を参照してください。
-- Ubuntu Light: Ubuntu Font Licence 1.0。同じディレクトリの UFL.txt を参照してください。
-- emoji-icon-font: Copyright (c) 2014 John Slegers、MIT。
-  同じディレクトリの emoji-icon-font-mit-license.txt を参照してください。
-
-同じディレクトリの font-copyright-records.txt には、使用しているNoto Emojiと
-Ubuntu Lightのフォントメタデータから転記した著作権表示を収録しています。
-フォントのバイト列を実行ファイルに埋め込む場合も含め、GUIを配布する際は、
-該当するフォントの表記を保持してください。
-
-SDL GUIはfont8x8 0.3.1を使用します。Rust実装はMITで、著作権表示は
-Copyright (c) 2017 Joaquin Rosales です。上流プロジェクトはビットマップ字形を
-パブリックドメインとし、その由来を記録しています。原文の LICENSE と README.md
-の全文を licenses/fonts/font8x8-0.3.1/ に保持しています。
-
-SDL GUIは、ローカルにインストールされたWindowsのフォントも検索します。
-これらのシステムフォントには独自の条件が引き続き適用され、読み込むことによって
-再配布許諾が与えられるわけではありません。KOKURAのMITライセンスは、第三者の
-フォントのライセンスを変更するものではありません。
-
-これらの注記は、フォントの権利とプロジェクトのコードの権利を区別するものです。
-第三者のライセンスを置き換えたり、上記のMITライセンスが適用されるコードに
-追加の制限を課したりするものではありません。

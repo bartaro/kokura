@@ -1,8 +1,0 @@
-Original copyright records from the font name tables (name ID 0).
-
-NotoEmoji-Regular.ttf
-Copyright 2013 Google Inc. All Rights Reserved.
-
-Ubuntu-Light.ttf
-Copyright 2011 Canonical Ltd.  Licensed under the Ubuntu Font Licence 1.0
-

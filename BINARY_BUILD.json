@@ -1,0 +1,372 @@
+{
+  "built_on": "2026-09-13",
+  "licensor": "DAISUKE OBA",
+  "source_revision_before_packaging": "c229148924342ed65660648de27af4abf7750a84",
+  "target": "x86_64-pc-windows-msvc",
+  "configuration": "Release",
+  "rustflags": "-C target-feature=+crt-static",
+  "build_command": ".\\scripts\\build.ps1 -Offline",
+  "cargo_lock_sha256": "ecad5e5636b70117b1bb2cde3d420b1f9df6732e84f5c7cdf3dd8f5dfd15e0ca",
+  "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-pc-windows-msvc\nrelease: 1.93.1\nLLVM version: 21.1.8",
+  "binary": {
+    "path": "kokura-cli.exe",
+    "bytes": 5805056,
+    "sha256": "6e6ef2a05f359d5e0d1230fc4eca40cee25f8fdd78a07269a35c842246f008ba",
+    "imported_system_dlls": [
+      "api-ms-win-core-synch-l1-2-0.dll",
+      "kernel32.dll",
+      "ntdll.dll"
+    ]
+  },
+  "source_inputs": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "ecad5e5636b70117b1bb2cde3d420b1f9df6732e84f5c7cdf3dd8f5dfd15e0ca"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "d6b2cf8fedc439d8c47e49d11b40120b9dd0e68bb39ce618ea6093a0758cc28d"
+    },
+    {
+      "path": "crates/kokura-bridge/Cargo.toml",
+      "sha256": "e65ac0b594bd7266f3176ce2e5a8d6e22d87c49ad34784199fc9172b77f6299f"
+    },
+    {
+      "path": "crates/kokura-bridge/src/banktrace.rs",
+      "sha256": "d74d4425ba327797f0a53f4d4d415b7e7602c7f492c0ca376ff3ee3ad685590b"
+    },
+    {
+      "path": "crates/kokura-bridge/src/decompile.rs",
+      "sha256": "01629fab46dfb55ff132b45b21f163e5c7a437a0c0c33bf84e793d8bd9c93954"
+    },
+    {
+      "path": "crates/kokura-bridge/src/intrinsics.rs",
+      "sha256": "e4f0fb0203b5733e8bc8245444ec69eaa228bc9280bb85a5fe605696426dd607"
+    },
+    {
+      "path": "crates/kokura-bridge/src/lib.rs",
+      "sha256": "f91d8deb2ce35af96e189d384940884d9f2fec75dabda3904ca4681f1d0acf36"
+    },
+    {
+      "path": "crates/kokura-bridge/src/map_parser.rs",
+      "sha256": "7e4372049d4ddca23d7906c1f2417a349587cc48633adb8569cb39abbd698598"
+    },
+    {
+      "path": "crates/kokura-bridge/src/source_map.rs",
+      "sha256": "8ae8c7483890fdc38a161827b0e21f32630f2a5644a7a21fd57bd85342cabdfc"
+    },
+    {
+      "path": "crates/kokura-bridge/src/symbols.rs",
+      "sha256": "345b4521c316db11b50b95ebd6f006904e6d93a03ded6d6b735a7e2f7dd9f7a3"
+    },
+    {
+      "path": "crates/kokura-capi/Cargo.toml",
+      "sha256": "f8c96e3cf0059c67c53c22d0a5eb6ec4729406c9f7a308cad8e90a76b5cb504f"
+    },
+    {
+      "path": "crates/kokura-capi/src/bridge.rs",
+      "sha256": "aef8b724dd7218f952f51d63e78d042744d7a10781077c3b65f78af7723d895b"
+    },
+    {
+      "path": "crates/kokura-capi/src/core.rs",
+      "sha256": "a6f9864bb60b9554265b5319d9a0a48790d933b261a2dd0974a119eaaf697f4c"
+    },
+    {
+      "path": "crates/kokura-capi/src/debug.rs",
+      "sha256": "65a166b2d0349b0f78c0fa4465177babb6f1828465c9e76f47e8b76a1279504e"
+    },
+    {
+      "path": "crates/kokura-capi/src/ffi_types.rs",
+      "sha256": "2b98b7454a78fa66edaabdc67f23ab611fc499335866f9f3a0b7ffe5c6a97b2d"
+    },
+    {
+      "path": "crates/kokura-capi/src/lib.rs",
+      "sha256": "86685dfa0fc95f1bbeb63dab40b8e8afbc4268f0568cc33c46d548b00bc32f0f"
+    },
+    {
+      "path": "crates/kokura-capi/src/strings.rs",
+      "sha256": "28df598454eda2808003d65b7b265922e66651d1c41b631e34d21b1e10fcfe11"
+    },
+    {
+      "path": "crates/kokura-cli/Cargo.toml",
+      "sha256": "fadcadde6c455e70533cd41ff7bafffb3c62074cc20fa99cc3895f81a424f5d8"
+    },
+    {
+      "path": "crates/kokura-cli/build.rs",
+      "sha256": "60c7a3e5c157078ee7b2761672eecc1e6daeca2a50e88511250d92550522724d"
+    },
+    {
+      "path": "crates/kokura-cli/src/args.rs",
+      "sha256": "cec361edcfce9e9b8953425ff4307b3f3c9f9f16d09f2c1003b5fb621cb5768b"
+    },
+    {
+      "path": "crates/kokura-cli/src/json_io.rs",
+      "sha256": "8334bad81fa97c97f3740cebe515d26773437b471149ab9b4187760c33668b57"
+    },
+    {
+      "path": "crates/kokura-cli/src/main.rs",
+      "sha256": "9d4c9d22def9bbea2a9155b623aa00dbe9dec29689250d08de49794519ddbe93"
+    },
+    {
+      "path": "crates/kokura-cli/src/run.rs",
+      "sha256": "153b4ed48e96152dba3e8236bfdfe0dfdd86d7b561e10a8d730235bf5e469a87"
+    },
+    {
+      "path": "crates/kokura-core/Cargo.toml",
+      "sha256": "aaee4399e2cd6dd3ed0e000ff1e03d3766058368166e79654a91d8d1423ed477"
+    },
+    {
+      "path": "crates/kokura-core/examples/frame_probe.rs",
+      "sha256": "3080f438ecc811f331e4a5993db5a6047cfb4eb4c460c95af249754ec428cc6c"
+    },
+    {
+      "path": "crates/kokura-core/examples/perf_probe.rs",
+      "sha256": "5489336f4f14db6fed7416757bff750703f407818b652ba9c548c3f2ccc6756c"
+    },
+    {
+      "path": "crates/kokura-core/examples/trace_from_state.rs",
+      "sha256": "2f50a3995f44752cad2898d59fab791e8d22dee9acfce784d9fe26a5b218d5c9"
+    },
+    {
+      "path": "crates/kokura-core/examples/trace_x_transition.rs",
+      "sha256": "aad9eda93f7036e9263985cd1e599cc27c72176528a256bcebe5dfee1b8ecdfa"
+    },
+    {
+      "path": "crates/kokura-core/src/apu.rs",
+      "sha256": "6f7a8ca4f23fac6be61535e9bc42c6a060b6303ebb42a16295f1e72b83ee82c5"
+    },
+    {
+      "path": "crates/kokura-core/src/bus.rs",
+      "sha256": "c4f112281dbdc3c52b9308b21e5b809b083074d20e883404ac126bf1b67be824"
+    },
+    {
+      "path": "crates/kokura-core/src/cartridge.rs",
+      "sha256": "09c995334c36f99f71f5678f9ee9d5da821b63fc2bd94420e5fa09535b15147f"
+    },
+    {
+      "path": "crates/kokura-core/src/cpu/decode.rs",
+      "sha256": "5309cff45519921d828f343242be8d3820d42fa8f5b12878b8d7f3a5c6642b31"
+    },
+    {
+      "path": "crates/kokura-core/src/cpu/exec.rs",
+      "sha256": "5309cff45519921d828f343242be8d3820d42fa8f5b12878b8d7f3a5c6642b31"
+    },
+    {
+      "path": "crates/kokura-core/src/cpu/mod.rs",
+      "sha256": "95c3efcdf703f8699ef01b9192d36b9f8ef5f069790d0ccfef25e2cac547ecf3"
+    },
+    {
+      "path": "crates/kokura-core/src/cpu/ops_alu.rs",
+      "sha256": "5309cff45519921d828f343242be8d3820d42fa8f5b12878b8d7f3a5c6642b31"
+    },
+    {
+      "path": "crates/kokura-core/src/cpu/ops_jump.rs",
+      "sha256": "5309cff45519921d828f343242be8d3820d42fa8f5b12878b8d7f3a5c6642b31"
+    },
+    {
+      "path": "crates/kokura-core/src/cpu/ops_load.rs",
+      "sha256": "5309cff45519921d828f343242be8d3820d42fa8f5b12878b8d7f3a5c6642b31"
+    },
+    {
+      "path": "crates/kokura-core/src/cpu/ops_misc.rs",
+      "sha256": "5309cff45519921d828f343242be8d3820d42fa8f5b12878b8d7f3a5c6642b31"
+    },
+    {
+      "path": "crates/kokura-core/src/cpu/regs.rs",
+      "sha256": "fc7f13b19639d3e7525abd0c1ed7a699dc932ae1e76339227ba89d05356251bd"
+    },
+    {
+      "path": "crates/kokura-core/src/diagnostic_events.rs",
+      "sha256": "7394ceb7e7817d1242e955a1c7cd6438822bf1023c4dcbb00f0c29b349dafc4a"
+    },
+    {
+      "path": "crates/kokura-core/src/dma.rs",
+      "sha256": "ea547c4e6333fd12a4b1f4b9cd6a1bdca8af41a7133d8f61f1b990c75d9f4527"
+    },
+    {
+      "path": "crates/kokura-core/src/error.rs",
+      "sha256": "5c20f776b428fa09c80aa01f5ab23dc4bba649ed34254bd6b759bc470fae499c"
+    },
+    {
+      "path": "crates/kokura-core/src/interrupt.rs",
+      "sha256": "d85f6b7b6564a0e62b5d71ee6bf2752997b468d9dec9f4094e7e395917f481c4"
+    },
+    {
+      "path": "crates/kokura-core/src/joypad.rs",
+      "sha256": "ac1f5ae62d8024fb55fce933ca25d22e1b676313829b2ef2e92284d379ea3349"
+    },
+    {
+      "path": "crates/kokura-core/src/lib.rs",
+      "sha256": "7c25630f767faaff1efe6ed388d36818f0039172a8132a8e7d5507e65b0059a1"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/camera.rs",
+      "sha256": "dc9cf9363dee6b3dd82dd149763ed6f19e17ab84e453a1fd890224ac7e7c1304"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/huc1.rs",
+      "sha256": "1206fae2dc001597d08aba4a43589f82445f65c1643d376d9cb57bd257df4866"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/huc3.rs",
+      "sha256": "3f90139f2d37940ab36c762ca832d14fc06502acfd783b39b3c922765aa4994f"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/mbc1.rs",
+      "sha256": "6aad41fff386af2cee74af935de94c4a6ea80509d0a35bdb9e451fa64d47fcb7"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/mbc2.rs",
+      "sha256": "57324db31c0d221fc470ceb742e5527a5878764a01f00fa2efc581050fddc779"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/mbc3.rs",
+      "sha256": "50676c0eb54c011e1e523d08d3682080317b996ec8f745de59fe70abc0d47620"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/mbc5.rs",
+      "sha256": "e682dc8bda3e93746f1b0a3e9ca961f344890c514b099d48b3ed0eb70959e12a"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/mbc6.rs",
+      "sha256": "2a25e0e7bbdda7840bdec21662be71697ef57a91e8554c8ffc28b1da83718396"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/mbc7.rs",
+      "sha256": "ec61314d34493c6ec1aa72b2e877c65e06bcb30e2cb4e59b9da4924645669097"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/mmm01.rs",
+      "sha256": "177e38597f137fcdd8b135ddffe194389486cdd6050ca590479458e6b2e1db9f"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/mod.rs",
+      "sha256": "22ff734437eb06ca491876e74d1d07f7771863605bd03e92f1537661d9617577"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/rom_only.rs",
+      "sha256": "9bf44911bc96eaeeb7c8c102176661d5443a8b401ae8bf2ae0634902658a4656"
+    },
+    {
+      "path": "crates/kokura-core/src/mbc/tama5.rs",
+      "sha256": "58c05525c3b285af278bc7198bf54464c89c3e7d912fd2982aa8410983043ab7"
+    },
+    {
+      "path": "crates/kokura-core/src/memory.rs",
+      "sha256": "4547a06ae2cb8aa8e82c01d71fee90eef734ca11f5f0f11a2affcc0b13ca4142"
+    },
+    {
+      "path": "crates/kokura-core/src/ppu/mod.rs",
+      "sha256": "09d9e496971a823ea684d581b976241b0b1566248111f045caf8fb837e60ffb2"
+    },
+    {
+      "path": "crates/kokura-core/src/ppu/regs.rs",
+      "sha256": "4c4ce32b23c94e529f750ef1ddfa972457f5b1a204ab39de2ce60f748fa9e1ca"
+    },
+    {
+      "path": "crates/kokura-core/src/ppu/render.rs",
+      "sha256": "4c4ce32b23c94e529f750ef1ddfa972457f5b1a204ab39de2ce60f748fa9e1ca"
+    },
+    {
+      "path": "crates/kokura-core/src/serial.rs",
+      "sha256": "54af6619208d737ab0abfc7300b05ef6bd065bc25ee986e533663370412f80f7"
+    },
+    {
+      "path": "crates/kokura-core/src/state.rs",
+      "sha256": "5c13a06ab0205b850082e290f46966bcfec839bec14e9637145dc1e8347465e4"
+    },
+    {
+      "path": "crates/kokura-core/src/timer.rs",
+      "sha256": "24a28bb5d2079584e42c696350949a7f0e07c01cdaae702a3ec214dc88ce4fd8"
+    },
+    {
+      "path": "crates/kokura-core/src/types.rs",
+      "sha256": "cb4f4487035192cd788c095202702b6643e38e8804d9e009122919a370d61e77"
+    },
+    {
+      "path": "crates/kokura-debug/Cargo.toml",
+      "sha256": "98c14ee451ab263b2662a4f810e7be839e25aaba1ee6216a38eef28e2f4b34bd"
+    },
+    {
+      "path": "crates/kokura-debug/src/diagnostics.rs",
+      "sha256": "bfa477c6093922a20c6952a8fed18f28d8963467b9225c265dc645a82c5e850e"
+    },
+    {
+      "path": "crates/kokura-debug/src/events.rs",
+      "sha256": "635ff2a731b3dd7fa6f185bd3db3cf145572609b7d8a117194dd684314962cb3"
+    },
+    {
+      "path": "crates/kokura-debug/src/frame_diff.rs",
+      "sha256": "c90bb761b0ac33ceb787785ee57f5893b4935eb26d653d7f7db9f86190a2db66"
+    },
+    {
+      "path": "crates/kokura-debug/src/hashes.rs",
+      "sha256": "c90bb761b0ac33ceb787785ee57f5893b4935eb26d653d7f7db9f86190a2db66"
+    },
+    {
+      "path": "crates/kokura-debug/src/input.rs",
+      "sha256": "c90bb761b0ac33ceb787785ee57f5893b4935eb26d653d7f7db9f86190a2db66"
+    },
+    {
+      "path": "crates/kokura-debug/src/lib.rs",
+      "sha256": "1c8617c2f8738ab29e0455cbaa69d6839ef6c25d60ef2535214312c9143cc890"
+    },
+    {
+      "path": "crates/kokura-debug/src/link.rs",
+      "sha256": "fb6ee4bf1640b9b5f7cfe10f2bbdfb34cddac5460c3d427a8df8cdf57a103347"
+    },
+    {
+      "path": "crates/kokura-debug/src/report.rs",
+      "sha256": "5e85cad9c74da0c17de675c6f2e59d8b8514dabf0b67147e31056410a76d54a5"
+    },
+    {
+      "path": "crates/kokura-debug/src/session.rs",
+      "sha256": "7a1a514b178fb2effcd6da7e1114d1ebe508c9cf9fdf4177c638edec3984d163"
+    },
+    {
+      "path": "crates/kokura-debug/src/snapshot.rs",
+      "sha256": "f7e80e98abc22264b7c9e81dd1533cf30dd1a6975563e6b415f3a1eb6151fcd1"
+    },
+    {
+      "path": "crates/kokura-debug/src/stop.rs",
+      "sha256": "5a9abf3c0208c9ce420a0a00db338569aeb2fc4d345a4dc61b5d2fde487c3015"
+    },
+    {
+      "path": "crates/kokura-debug/src/watch.rs",
+      "sha256": "79f282fe5862d70df8fc27cf436a899d3b958de6044cb1399de5f8f341754b4d"
+    },
+    {
+      "path": "crates/kokura-debug/tests/link16_pair_tempo.rs",
+      "sha256": "747d228a4b190fca09961c5f4cb5d686be9101cd9ae6c767b014bca7933c6fcf"
+    },
+    {
+      "path": "crates/kokura-py/Cargo.toml",
+      "sha256": "8fcb32804188b02da5c6b3c8ab5ad7efc52967033509ef0f0590ce6be09160ee"
+    },
+    {
+      "path": "crates/kokura-py/src/lib.rs",
+      "sha256": "0cbfed896250b184d6489b08104c6a1f58a0520229c607de49dec7232772a0a5"
+    }
+  ],
+  "checks": [
+    {
+      "check": "--help",
+      "exit_code": 0
+    },
+    {
+      "check": "gb_hello execution and screenshot",
+      "frames": 120,
+      "rom_sha256": "4698385540f315b38d323388ac7934f11a1c29eef108f8af8105e8a585035f6d",
+      "pixel_comparison": "exact match to published manual reference",
+      "png_sha256": "72268d2e314d734c073838f4d74f517e3c7ce2abcfb62d559de169d5ab82cff1"
+    },
+    {
+      "check": "gb_cgb_palette execution and screenshot",
+      "frames": 120,
+      "rom_sha256": "8fc50a98502ee61a714e0d38c11a53f06b91b6b337d19d4bc671c544f5ddb826",
+      "pixel_comparison": "exact match to published manual reference",
+      "png_sha256": "e8a5f35e521462be999ce79bd07caf8208a71c52d142d3d795e733b098dce038"
+    }
+  ],
+  "scope": "CLI-only distribution. GUI, C API DLL and Python extension binaries are excluded. These focused executable checks do not repeat all historical workspace tests or establish physical-hardware compatibility."
+}

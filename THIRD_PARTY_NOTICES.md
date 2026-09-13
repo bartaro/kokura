@@ -1,5 +1,7 @@
 # KOKURA Third-Party Notices
 
+For the distributed Windows CLI executable, see [BINARY_NOTICES.md](BINARY_NOTICES.md) and the full notice texts in `licenses/binary-dependencies/` and `licenses/rust-standard-library/`. Existing inventories describe broader or historical source-workspace scopes.
+
 Windows dependency metadata was rechecked on 2026-09-12; see
 [`THIRD_PARTY_NOTICES.windows.md`](THIRD_PARTY_NOTICES.windows.md).
 The older cross-platform inventory below is retained for reference and is not

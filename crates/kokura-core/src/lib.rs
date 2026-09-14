@@ -1,9 +1,8 @@
-//! KOKURA の実行コア。
+//! KOKURA execution core.
 //!
-//! [`Machine`] が CPU レジスタ、メモリ、PPU、APU、タイマ、割り込み、
-//! シリアル通信、カートリッジをひとつの実行状態として束ねます。
-//! CLI、GUI、C API、Python バインディングはこの層を利用し、コア自身は
-//! 特定の画面やホストUIに依存しない構成です。
+//! Machine combines CPU registers, memory, PPU, APU, timers, interrupts, serial
+//! communication and the cartridge into one execution state. Front ends and
+//! language bindings use this layer without making the core depend on a host UI.
 
 pub mod apu;
 pub mod bus;
@@ -61,6 +60,7 @@ pub struct SerialExternalClockTraceResult {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+// Report counted steps and accumulated CPU cycles; completion means a nominal frame boundary was crossed.
 pub struct RunSliceResult {
     pub instructions: usize,
     pub cycles: u32,
@@ -68,6 +68,8 @@ pub struct RunSliceResult {
 }
 
 #[derive(Debug, Clone)]
+// Own execution devices and transient observation state. MachineState intentionally
+// captures only a subset, so it is not interchangeable with cloning this entire type.
 pub struct Machine {
     pub cpu: Cpu,
     pub ppu: Ppu,
@@ -97,6 +99,8 @@ pub struct Machine {
 }
 
 impl Machine {
+    // Construct an empty DMG machine with independent device state, no cable attachment and disabled diagnostics.
+    // Loading a ROM applies the separate post-boot register initialization.
     pub fn new() -> Self {
         Self {
             cpu: Cpu::default(),
@@ -127,10 +131,13 @@ impl Machine {
         }
     }
 
+    // Load with automatic hardware selection based on the cartridge header.
     pub fn load_rom(&mut self, rom: Vec<u8>) -> Result<(), error::CoreError> {
         self.load_rom_with_mode(rom, None)
     }
 
+    // Parse the cartridge and reject forced DMG for a CGB-only ROM before replacing live state.
+    // A successful load resets execution/devices but preserves whether diagnostic capture is enabled.
     pub fn load_rom_with_mode(
         &mut self,
         rom: Vec<u8>,
@@ -153,6 +160,7 @@ impl Machine {
             }
         };
 
+        // All fallible header/mode checks above complete before the live machine is reset.
         self.cartridge = cartridge;
         self.cpu = Cpu::default();
         self.ppu = Ppu::default();
@@ -192,6 +200,7 @@ impl Machine {
         self.active_interrupt_vector = None;
         self.pending_cpu_stall_cycles = 0;
         self.cgb_speed_switch_freeze_cycles = 0;
+        // Leave the selected-mode observation pending for the next traced step after other startup traces are cleared.
         self.pending_cgb_trace.push(CgbTraceEvent::ModeSelected {
             cgb_enabled: self.mode == HardwareMode::Cgb,
             cgb_only: self.cartridge.cgb_only(),
@@ -199,6 +208,8 @@ impl Machine {
         Ok(())
     }
 
+    // Install the modeled DMG/CGB entry registers at PC 0x0100 without running a boot ROM.
+    // Initialize timer/APU state and align the nominal frame phase with the initial PPU coordinates.
     fn initialize_post_boot_state(&mut self) {
         match self.mode {
             HardwareMode::Dmg => {
@@ -273,7 +284,10 @@ impl Machine {
         self.clocks.frame_phase_ppu_cycles = u32::from(self.ppu.ly) * 456 + self.ppu.mode_cycles;
     }
 
+    // Fill all BG/OBJ palettes with one fixed four-color compatibility palette for a
+    // DMG-header ROM forced into CGB mode, then restore both palette indices to zero.
     fn initialize_cgb_compatibility_palettes(&mut self) {
+        // Pack masked five-bit red, green and blue components into a color word.
         fn rgb555(r: u16, g: u16, b: u16) -> u16 {
             (r & 0x1F) | ((g & 0x1F) << 5) | ((b & 0x1F) << 10)
         }
@@ -304,6 +318,8 @@ impl Machine {
         self.memory.set_obj_palette_index(0);
     }
 
+    // Refresh raw memory mirrors from live devices without routing writes through the CPU bus
+    // and retriggering device side effects.
     fn sync_core_memory(&mut self) {
         self.memory.write8(0xFF00, self.joypad.read_p1());
         self.memory.write8(0xFF01, self.serial.sb);
@@ -328,6 +344,8 @@ impl Machine {
         self.memory.write8(0xFFFF, self.interrupt.ie);
     }
 
+    // Delegate the byte exchange, synchronize both serial mirrors and return only new
+    // interrupt-request traces. Older pending interrupt observations stay in each machine.
     pub fn exchange_serial_with_peer(&mut self, peer: &mut Self) -> SerialLinkTraceResult {
         let exchange = self.serial.exchange_with_peer(&mut peer.serial);
         let mut out = SerialLinkTraceResult {
@@ -371,6 +389,8 @@ impl Machine {
 
     /// Completes an armed external-clock serial transfer against an attached
     /// peripheral and records the same MMIO/interrupt evidence as a link peer.
+    // Complete an armed external-clock byte, mirror SB/SC and return its new interrupt
+    // observations. This call supplies a whole byte rather than advancing CPU clocks.
     pub fn clock_external_serial_byte(&mut self, incoming: u8) -> SerialExternalClockTraceResult {
         let exchange = self.serial.clock_external_byte(incoming);
         let mut out = SerialExternalClockTraceResult {
@@ -402,14 +422,18 @@ impl Machine {
     /// backplane. While attached, an internal-clock transfer waits for the
     /// runner to exchange it with a peer instead of completing against the
     /// standalone open-bus value.
+    // Select cooperative peer completion versus standalone serial behavior; this does not exchange a byte.
     pub fn set_serial_link_attached(&mut self, attached: bool) {
         self.serial_link_attached = attached;
     }
 
+    // Expose the current cooperative serial-attachment flag.
     pub fn serial_link_attached(&self) -> bool {
         self.serial_link_attached
     }
 
+    // Handle a pending interrupt or halted idle step before fetching an opcode. A failed
+    // opcode execution can leave PC/bus side effects applied and does not call finish_step.
     pub fn step_instruction(&mut self) -> Result<StepResult, error::CoreError> {
         let mut serviced_interrupt = false;
         if self.interrupt.has_pending() {
@@ -448,12 +472,12 @@ impl Machine {
         Ok(self.finish_step(cycles))
     }
 
+    // Use the same opcode execution path with fast timing finalization and discarded traces.
+    // An enabled pending interrupt wakes HALT regardless of IME; servicing consumes its own step.
     pub fn step_instruction_fast(&mut self) -> Result<(), error::CoreError> {
         let mut serviced_interrupt = false;
         if self.interrupt.has_pending() {
-            if !self.cpu.ime {
-                self.cpu.halted = false;
-            }
+            self.cpu.halted = false;
             if self.cpu.ime {
                 self.service_interrupt()?;
                 serviced_interrupt = true;
@@ -482,6 +506,8 @@ impl Machine {
         Ok(())
     }
 
+    // Step until the nominal frame counter changes, propagating errors with completed work retained.
+    // The machine clock can advance nominal frames even when the LCD is disabled.
     pub fn run_frame(&mut self) -> Result<(), error::CoreError> {
         let start = self.clocks.frames;
         while self.clocks.frames == start {
@@ -490,6 +516,7 @@ impl Machine {
         Ok(())
     }
 
+    // Use fast instruction stepping until the nominal frame counter changes.
     pub fn run_frame_fast(&mut self) -> Result<(), error::CoreError> {
         let start = self.clocks.frames;
         while self.clocks.frames == start {
@@ -498,6 +525,8 @@ impl Machine {
         Ok(())
     }
 
+    // Try to grow the queued stereo-frame count, capped by one nominal frame of cycles
+    // and 8192 steps. Return net queue growth, which may be smaller than generated audio after overflow.
     pub fn run_audio_slice(
         &mut self,
         min_additional_frames: usize,
@@ -507,6 +536,7 @@ impl Machine {
         }
 
         let start_buffered = self.audio_frames_available();
+        // A target above queue capacity may be unreachable; cycle/step caps still bound this audio request.
         let target_buffered = start_buffered.saturating_add(min_additional_frames);
         let max_cycles = self
             .clocks
@@ -525,6 +555,8 @@ impl Machine {
         Ok(self.audio_frames_available().saturating_sub(start_buffered))
     }
 
+    // Stop at an instruction budget, accumulated cycle budget or first completed frame.
+    // A whole step can overshoot the cycle limit; idle/interrupt steps also count as instructions here.
     pub fn run_slice(
         &mut self,
         max_instructions: usize,
@@ -547,11 +579,14 @@ impl Machine {
         Ok(result)
     }
 
+    // Apply the button mask and route resulting joypad edges through trace/interrupt capture.
     pub fn set_joypad_mask(&mut self, mask: u8) {
         let trace = self.joypad.set_mask(mask);
         self.capture_joypad_trace(trace);
     }
 
+    // Clone the machine and synchronize device mirrors on that clone before capturing
+    // MachineState. Saving does not mutate the live machine or preserve fields absent from the state type.
     pub fn save_state(&self) -> MachineState {
         let mut snapshot = self.clone();
         snapshot.sync_core_memory();
@@ -560,10 +595,15 @@ impl Machine {
         MachineState::from_machine(&snapshot)
     }
 
+    // Apply caller-validated state, rebuild/redraw PPU output and clear transient traces/stalls.
+    // This path does not check state version/invariants or match the embedded ROM to the live cartridge.
+    // The existing cable-attachment flag and diagnostic enabled flag remain in place.
     pub fn load_state(&mut self, state: &MachineState) {
         state.apply_to(self);
         self.apu.set_cgb_mode(self.mode == HardwareMode::Cgb);
         self.ppu.restore_runtime_state(&self.memory);
+        // Rebuild visible pixels from restored current memory/registers; this is not a replay
+        // of mid-frame rendering history, even when a saved framebuffer was present.
         self.ppu.render_visible_area_from_memory_with_mode(
             &self.memory,
             self.mode == HardwareMode::Cgb,
@@ -580,66 +620,82 @@ impl Machine {
         self.pending_cpu_stall_cycles = 0;
     }
 
+    // Borrow the 160x144 shade plane; contents can change after execution or state restoration.
     pub fn framebuffer(&self) -> &[u8; 160 * 144] {
         &self.ppu.framebuffer
     }
 
+    // Borrow the RGB555 color plane; each slice element is one color word.
     pub fn framebuffer_rgb555(&self) -> &[u16] {
         &self.ppu.color_framebuffer
     }
 
+    // Identify a machine running in CGB mode whose cartridge header does not advertise CGB support.
     pub fn is_cgb_compat_mode(&self) -> bool {
         self.mode == HardwareMode::Cgb && !self.cartridge.supports_cgb()
     }
 
+    // Expose the cartridge controller's current ROM-bank label.
     pub fn current_rom_bank(&self) -> u16 {
         self.cartridge.current_rom_bank()
     }
 
+    // Delegate cartridge RAM persistence eligibility rather than testing mapper/RTC persistence generally.
     pub fn has_battery_backed_ram(&self) -> bool {
         self.cartridge.has_battery_backed_ram()
     }
 
+    // Copy eligible external RAM only; this is separate from a full machine state.
     pub fn battery_save_bytes(&self) -> Option<Vec<u8>> {
         self.cartridge.battery_save_bytes()
     }
 
+    // Report whether the eligible cartridge RAM has a pending dirty flag.
     pub fn battery_save_dirty(&self) -> bool {
         self.cartridge.battery_save_dirty()
     }
 
+    // Combine eligible battery RAM with the mapper's current access-enable gate.
     pub fn battery_ram_access_enabled(&self) -> bool {
         self.cartridge.battery_ram_access_enabled()
     }
 
+    // Acknowledge that the host has persisted cartridge RAM without changing its contents.
     pub fn mark_battery_save_clean(&mut self) {
         self.cartridge.mark_battery_save_clean();
     }
 
+    // Load the overlapping save prefix through the cartridge helper and return the copied byte count.
     pub fn load_battery_save_bytes(&mut self, bytes: &[u8]) -> usize {
         self.cartridge.load_battery_save_bytes(bytes)
     }
 
+    // Return the core APU stereo-frame rate before any host resampling.
     pub fn audio_sample_rate(&self) -> u32 {
         self.apu.output_sample_rate()
     }
 
+    // Keep the source-rate alias on the same fixed APU rate; no resampling is performed here.
     pub fn audio_source_sample_rate(&self) -> u32 {
         self.audio_sample_rate()
     }
 
+    // Report queued stereo frames rather than individual interleaved samples.
     pub fn audio_frames_available(&self) -> usize {
         self.apu.buffered_frames()
     }
 
+    // Expose the APU overflow counter; explicit queue resizing is not counted as overflow.
     pub fn audio_frames_dropped(&self) -> u64 {
         self.apu.dropped_frames()
     }
 
+    // Expose the logical APU queue limit in stereo frames.
     pub fn audio_buffer_capacity_frames(&self) -> usize {
         self.apu.buffer_capacity_frames()
     }
 
+    // Delegate nonzero-capacity validation and queue resizing to the APU.
     pub fn set_audio_buffer_capacity_frames(
         &mut self,
         capacity_frames: usize,
@@ -647,26 +703,33 @@ impl Machine {
         self.apu.set_buffer_capacity_frames(capacity_frames)
     }
 
+    // Remove up to the requested stereo-frame count as signed left/right interleaved PCM.
     pub fn drain_audio_frames_interleaved_i16(&mut self, max_frames: usize) -> Vec<i16> {
         self.apu.drain_interleaved_i16(max_frames)
     }
 
+    // Expose the cartridge controller's current RAM-bank label.
     pub fn current_ram_bank(&self) -> u16 {
         self.cartridge.current_ram_bank()
     }
 
+    // Toggle future diagnostic aggregation without clearing existing observations.
     pub fn set_diagnostic_events_enabled(&mut self, enabled: bool) {
         self.diagnostic_events.set_enabled(enabled);
     }
 
+    // Discard diagnostic history and restart aggregate IDs while preserving the enabled flag.
     pub fn clear_diagnostic_events(&mut self) {
         self.diagnostic_events.clear();
     }
 
+    // Borrow retained diagnostic aggregates without draining or advancing the machine.
     pub fn diagnostic_events(&self) -> &[DiagnosticEvent] {
         self.diagnostic_events.events()
     }
 
+    // Attach current machine frame, PPU timing, PC/bank and DMA state to an observation
+    // only when capture is enabled. These coordinates are sampled when this helper is called.
     fn record_diagnostic_event(
         &mut self,
         event_type: &str,
@@ -705,6 +768,8 @@ impl Machine {
         );
     }
 
+    // Observe the mapped bus without adding read traces, while still honoring DMA, VRAM
+    // and OAM access restrictions. This is not an unrestricted backing-memory inspection API.
     pub fn peek8(&self, addr: u16) -> u8 {
         if self.dma_blocks_cpu_access(addr) {
             return 0xFF;
@@ -755,6 +820,8 @@ impl Machine {
                     0xFF
                 }
             }
+            // These HDMA register reads expose the model fields directly, with the hardware-style
+            // unused-bit masks below; this read group is not separately gated on CGB mode.
             0xFF51 => self.dma.hdma1,
             0xFF52 => self.dma.hdma2 | 0x0F,
             0xFF53 => self.dma.hdma3 | 0xE0,
@@ -798,6 +865,7 @@ impl Machine {
                 }
             }
             0xFFFF => self.interrupt.ie,
+            // OAM observation requires both a permitted LCD mode and no active OAM DMA.
             0xFE00..=0xFE9F => {
                 if self.ppu.can_cpu_access_oam() && !self.dma.active {
                     self.memory.read8(addr)
@@ -809,6 +877,8 @@ impl Machine {
         }
     }
 
+    // Return the same mapped value as peek8, then record blocked accesses and P1 reads.
+    // The returned FF value alone cannot distinguish a blocked access from stored FF data.
     pub fn read8(&mut self, addr: u16) -> u8 {
         let dma_blocked = self.dma_blocks_cpu_access(addr);
         let value = self.peek8(addr);
@@ -840,6 +910,7 @@ impl Machine {
                 Some("read"),
             );
         }
+        // Record selected P1 lines and input mask with the returned byte, without consuming an input edge.
         if addr == 0xFF00 {
             self.pending_io_trace
                 .push(IoTraceEvent::Joypad(JoypadTraceEvent::Read {
@@ -851,6 +922,8 @@ impl Machine {
         value
     }
 
+    // Use a predicted sample for supported timed I/O registers; all other addresses
+    // fall back to the ordinary traced bus read.
     fn read8_timed(&mut self, addr: u16, cpu_cycles_until_sample: u32) -> u8 {
         if let Some(value) = self.predict_timed_io_read(addr, cpu_cycles_until_sample) {
             value
@@ -859,6 +932,8 @@ impl Machine {
         }
     }
 
+    // Predict only STAT and LY after the given CPU-to-PPU cycle conversion without
+    // advancing devices. This direct prediction bypasses ordinary read tracing and DMA access checks.
     fn predict_timed_io_read(&self, addr: u16, cpu_cycles_until_sample: u32) -> Option<u8> {
         match addr {
             // Tight STAT/LY polling loops often observe the register value near the end of a
@@ -876,6 +951,8 @@ impl Machine {
         }
     }
 
+    // Route writes to mapper, memory or device handlers and accumulate their observations.
+    // DMA-blocked CPU writes return immediately; other restrictions are applied by address family.
     pub fn write8(&mut self, addr: u16, value: u8) {
         if self.dma_blocks_cpu_access(addr) {
             self.record_diagnostic_event(
@@ -889,6 +966,8 @@ impl Machine {
         }
         match addr {
             0x0000..=0x7FFF => {
+                // Record mapper writes from a tracked interrupt handler as a diagnostic, but still
+                // perform the write; the diagnostic is not a runtime access prohibition.
                 if self.active_interrupt_vector.is_some() {
                     self.record_diagnostic_event(
                         "IRQ_UNSAFE_RUNTIME_STATE_ACCESS",
@@ -898,12 +977,14 @@ impl Machine {
                         Some("irq_mapper_write"),
                     );
                 }
+                // Compare bank labels around the controller write so only actual bank changes emit transition events.
                 let mapper = self.cartridge.mapper_kind();
                 let before_rom_bank = self.cartridge.current_rom_bank();
                 let before_ram_bank = self.cartridge.current_ram_bank();
                 self.cartridge.write_mbc(addr, value);
                 let after_rom_bank = self.cartridge.current_rom_bank();
                 let after_ram_bank = self.cartridge.current_ram_bank();
+                // Detailed control-write events are limited to special mapper kinds; changed bank labels are tracked for all.
                 if mapper.is_special() {
                     self.pending_mapper_trace
                         .push(MapperTraceEvent::ControlWrite {
@@ -935,6 +1016,7 @@ impl Machine {
                         });
                 }
             }
+            // Ignore a blocked VRAM write after recording it; permitted writes use the currently selected bank.
             0x8000..=0x9FFF => {
                 if self.ppu.can_cpu_access_vram() {
                     self.memory.write8(addr, value);
@@ -949,6 +1031,7 @@ impl Machine {
                 }
             }
             0xA000..=0xBFFF => self.cartridge.write_ram(addr, value),
+            // A P1 selection write can create a joypad edge, so pass its events through the interrupt-capture path.
             0xFF00 => {
                 let trace = self.joypad.write_p1(value);
                 self.capture_joypad_trace(trace);
@@ -957,12 +1040,14 @@ impl Machine {
                 self.serial.write_sb(value);
                 self.memory.write8(addr, value);
             }
+            // Keep serial start/cancel observations and update the raw SC mirror from the device's masked read value.
             0xFF02 => {
                 let trace = self.serial.write_sc(value);
                 self.pending_io_trace
                     .extend(trace.into_iter().map(IoTraceEvent::Serial));
                 self.memory.write8(addr, self.serial.read_sc());
             }
+            // Reset DIV through its edge-aware handler; discarding the counter alone would miss timer side effects.
             0xFF04 => {
                 let mut trace = Vec::new();
                 self.timer.write_div(&mut trace);
@@ -971,18 +1056,21 @@ impl Machine {
             }
             0xFF05 => self.timer.write_tima(value),
             0xFF06 => self.timer.write_tma(value),
+            // Changing timer control can generate timer-edge observations before the next instruction tick.
             0xFF07 => {
                 let mut trace = Vec::new();
                 self.timer.write_tac(value, &mut trace);
                 self.pending_io_trace
                     .extend(trace.into_iter().map(IoTraceEvent::Timer));
             }
+            // Apply APU register/wave behavior, keep its events and refresh audio register mirrors.
             0xFF10..=0xFF26 | 0xFF30..=0xFF3F => {
                 let trace = self.apu.write(addr, value);
                 self.pending_apu_trace.extend(trace);
                 self.sync_apu_memory();
             }
             0xFF0F => self.interrupt.iflag = value & 0x1F,
+            // LCDC transitions can reset PPU position; resynchronize the nominal frame phase and request any new STAT edge.
             0xFF40 => {
                 let stat_line_raised = self.ppu.write_lcdc(value);
                 self.clocks.frame_phase_ppu_cycles =
@@ -991,6 +1079,7 @@ impl Machine {
                     self.request_interrupt(INT_LCD_STAT, InterruptSource::LcdStat);
                 }
             }
+            // Evaluate the modeled DMG STAT-write quirk before changing interrupt-source enables.
             0xFF41 => {
                 let spurious = self.dmg_stat_write_causes_spurious_interrupt();
                 let stat_line_raised = self.ppu.write_stat(value);
@@ -1000,12 +1089,15 @@ impl Machine {
             }
             0xFF42 => self.ppu.scy = value,
             0xFF43 => self.ppu.scx = value,
+            // LY is read-only in this CPU write path.
             0xFF44 => {}
             0xFF45 => {
                 if self.ppu.write_lyc(value) {
                     self.request_interrupt(INT_LCD_STAT, InterruptSource::LcdStat);
                 }
             }
+            // Arm or restart OAM DMA at the selected source page with a four-cycle startup delay.
+            // The actual copy occurs over subsequent machine clock advancement.
             0xFF46 => {
                 self.dma.ff46 = value;
                 self.memory.write8(addr, value);
@@ -1015,6 +1107,7 @@ impl Machine {
                 self.dma.cycle_accum = 0;
                 self.dma.start_delay_cycles = 4;
                 let dma_source = self.dma.source;
+                // Non-WRAM source pages are diagnosed as unsafe by policy here, but the transfer is still armed.
                 if !(0xC000..=0xDFFF).contains(&dma_source) {
                     self.record_diagnostic_event(
                         "OAM_DMA_SOURCE_UNSAFE",
@@ -1033,6 +1126,7 @@ impl Machine {
             0xFF4A => self.ppu.wy = value,
             0xFF4B => self.ppu.wx = value,
             0xFF4D => self.write_key1(value),
+            // Select the CGB VRAM bank and record the write; DMG mode ignores it.
             0xFF4F => {
                 if self.mode == HardwareMode::Cgb {
                     let bank = self.memory.set_vbk(value);
@@ -1040,6 +1134,7 @@ impl Machine {
                         .push(CgbTraceEvent::VramBankSwitch { bank, value });
                 }
             }
+            // Store HDMA address components with alignment/range masks; starting/canceling is handled at FF55.
             0xFF51 => {
                 self.dma.hdma1 = value;
                 self.memory.write8(addr, value);
@@ -1056,6 +1151,8 @@ impl Machine {
                 self.dma.hdma4 = value & 0xF0;
                 self.memory.write8(addr, value & 0xF0);
             }
+            // Diagnose selected unsafe start timings before delegating the control operation.
+            // The warning itself does not prevent the control write.
             0xFF55 => {
                 if self.mode == HardwareMode::Cgb && self.ppu.lcd_enabled() {
                     let mode = self.ppu.current_mode() as u8;
@@ -1080,6 +1177,7 @@ impl Machine {
                 }
                 self.write_hdma_control(value)
             }
+            // Set the CGB BG palette index and retain its auto-increment flag in the trace.
             0xFF68 => {
                 if self.mode == HardwareMode::Cgb {
                     let reg = self.memory.set_bg_palette_index(value);
@@ -1090,6 +1188,7 @@ impl Machine {
                         });
                 }
             }
+            // Let palette memory handle blocked data and index progression, then report the actual result.
             0xFF69 => {
                 if self.mode == HardwareMode::Cgb {
                     let result = self
@@ -1104,6 +1203,7 @@ impl Machine {
                         });
                 }
             }
+            // Set the CGB OBJ palette index with the same explicit index/auto-increment observation.
             0xFF6A => {
                 if self.mode == HardwareMode::Cgb {
                     let reg = self.memory.set_obj_palette_index(value);
@@ -1114,6 +1214,7 @@ impl Machine {
                         });
                 }
             }
+            // Apply OBJ palette access restrictions through memory and preserve blocked/increment metadata.
             0xFF6B => {
                 if self.mode == HardwareMode::Cgb {
                     let result = self
@@ -1128,6 +1229,7 @@ impl Machine {
                         });
                 }
             }
+            // Select the switchable CGB WRAM bank through memory's bank mapping and record it.
             0xFF70 => {
                 if self.mode == HardwareMode::Cgb {
                     let bank = self.memory.set_svbk(value);
@@ -1135,8 +1237,10 @@ impl Machine {
                         .push(CgbTraceEvent::WramBankSwitch { bank, value });
                 }
             }
+            // The digital PCM tap registers ignore writes.
             0xFF76..=0xFF77 => {}
             0xFFFF => self.interrupt.ie = value,
+            // Apply both LCD-mode and DMA restrictions before changing OAM bytes.
             0xFE00..=0xFE9F => {
                 if self.ppu.can_cpu_access_oam() && !self.dma.active {
                     self.memory.write8(addr, value);
@@ -1154,6 +1258,7 @@ impl Machine {
         }
     }
 
+    // Fetch a little-endian immediate through the bus, advancing PC with 16-bit wrap after each byte.
     fn read16_imm(&mut self) -> u16 {
         let lo = self.read8(self.cpu.pc) as u16;
         self.cpu.pc = self.cpu.pc.wrapping_add(1);
@@ -1162,6 +1267,7 @@ impl Machine {
         (hi << 8) | lo
     }
 
+    // Predecrement the wrapping stack pointer and write high then low bytes through ordinary bus rules.
     fn push16(&mut self, value: u16) {
         self.cpu.sp = self.cpu.sp.wrapping_sub(1);
         self.write8(self.cpu.sp, (value >> 8) as u8);
@@ -1169,6 +1275,7 @@ impl Machine {
         self.write8(self.cpu.sp, value as u8);
     }
 
+    // Read low then high bytes through the bus, postincrementing the wrapping stack pointer.
     fn pop16(&mut self) -> u16 {
         let lo = self.read8(self.cpu.sp) as u16;
         self.cpu.sp = self.cpu.sp.wrapping_add(1);
@@ -1177,10 +1284,12 @@ impl Machine {
         (hi << 8) | lo
     }
 
+    // Add the signed branch displacement to the already advanced PC with 16-bit wrapping.
     fn jr(&mut self, offset: i8) {
         self.cpu.pc = self.cpu.pc.wrapping_add_signed(offset as i16);
     }
 
+    // Increment modulo 256, set Z/N/half-carry and preserve the existing carry flag.
     fn inc8(&mut self, value: u8) -> u8 {
         let result = value.wrapping_add(1);
         self.cpu.f.set_z(result == 0);
@@ -1189,6 +1298,7 @@ impl Machine {
         result
     }
 
+    // Decrement modulo 256, set Z/N/half-borrow and preserve the existing carry flag.
     fn dec8(&mut self, value: u8) -> u8 {
         let result = value.wrapping_sub(1);
         self.cpu.f.set_z(result == 0);
@@ -1197,6 +1307,7 @@ impl Machine {
         result
     }
 
+    // AND into A, derive Z, set H and clear N/C.
     fn and_a(&mut self, value: u8) {
         self.cpu.a &= value;
         self.cpu.f.set_z(self.cpu.a == 0);
@@ -1205,6 +1316,7 @@ impl Machine {
         self.cpu.f.set_c(false);
     }
 
+    // OR into A, derive Z and clear N/H/C.
     fn or_a(&mut self, value: u8) {
         self.cpu.a |= value;
         self.cpu.f.set_z(self.cpu.a == 0);
@@ -1213,6 +1325,7 @@ impl Machine {
         self.cpu.f.set_c(false);
     }
 
+    // XOR into A, derive Z and clear N/H/C.
     fn xor_a(&mut self, value: u8) {
         self.cpu.a ^= value;
         self.cpu.f.set_z(self.cpu.a == 0);
@@ -1221,6 +1334,7 @@ impl Machine {
         self.cpu.f.set_c(false);
     }
 
+    // Set subtraction flags from A minus value without changing A.
     fn cp_a(&mut self, value: u8) {
         let a = self.cpu.a;
         let result = a.wrapping_sub(value);
@@ -1230,6 +1344,7 @@ impl Machine {
         self.cpu.f.set_c(a < value);
     }
 
+    // Add into A with eight-bit wrapping; derive half carry and carry from wider intermediate sums.
     fn add_a(&mut self, value: u8) {
         let a = self.cpu.a;
         let result = a.wrapping_add(value);
@@ -1240,6 +1355,7 @@ impl Machine {
         self.cpu.f.set_c((a as u16 + value as u16) > 0xFF);
     }
 
+    // Subtract into A and derive half-borrow/full-borrow flags from the original operands.
     fn sub_a(&mut self, value: u8) {
         let a = self.cpu.a;
         let result = a.wrapping_sub(value);
@@ -1250,6 +1366,7 @@ impl Machine {
         self.cpu.f.set_c(a < value);
     }
 
+    // Include the prior carry in a widened addition before updating A and all arithmetic flags.
     fn adc_a(&mut self, value: u8) {
         let a = self.cpu.a;
         let carry = if self.cpu.f.c() { 1 } else { 0 };
@@ -1264,6 +1381,7 @@ impl Machine {
         self.cpu.f.set_c(result16 > 0xFF);
     }
 
+    // Include the prior carry as an extra borrow and compare widened subtrahends for carry flags.
     fn sbc_a(&mut self, value: u8) {
         let a = self.cpu.a;
         let carry = if self.cpu.f.c() { 1 } else { 0 };
@@ -1275,6 +1393,7 @@ impl Machine {
         self.cpu.f.set_c((a as u16) < (value as u16 + carry as u16));
     }
 
+    // Rotate A left circularly; the unprefixed accumulator form clears Z regardless of the result.
     fn rlca(&mut self) {
         let carry = (self.cpu.a & 0x80) != 0;
         self.cpu.a = self.cpu.a.rotate_left(1);
@@ -1283,6 +1402,7 @@ impl Machine {
         self.cpu.f.set_h(false);
         self.cpu.f.set_c(carry);
     }
+    // Rotate A left through the previous carry and clear Z/N/H.
     fn rla(&mut self) {
         let carry_in = if self.cpu.f.c() { 1 } else { 0 };
         let carry = (self.cpu.a & 0x80) != 0;
@@ -1292,6 +1412,7 @@ impl Machine {
         self.cpu.f.set_h(false);
         self.cpu.f.set_c(carry);
     }
+    // Rotate A right circularly, exporting its old low bit to carry and clearing Z/N/H.
     fn rrca(&mut self) {
         let carry = (self.cpu.a & 0x01) != 0;
         self.cpu.a = self.cpu.a.rotate_right(1);
@@ -1301,9 +1422,12 @@ impl Machine {
         self.cpu.f.set_c(carry);
     }
 
+    // Adjust A for packed-decimal addition/subtraction using existing N/H/C. Preserve N,
+    // clear H and recompute Z while carrying the appropriate decimal carry forward.
     fn daa(&mut self) {
         let mut a = self.cpu.a;
         let mut adjust = 0u8;
+        // Subtraction keeps the incoming decimal carry; addition can establish carry when A exceeds 0x99.
         let mut carry = self.cpu.f.c();
         if !self.cpu.f.n() {
             if self.cpu.f.h() || (a & 0x0F) > 0x09 {
@@ -1329,6 +1453,8 @@ impl Machine {
         self.cpu.f.set_c(carry);
     }
 
+    // Add a signed displacement with wrapping but derive H/C from its low unsigned
+    // nibble/byte; SP-style addition always clears Z and N.
     fn add_signed_to_sp_like_flags(&mut self, base: u16, offset: i8) -> u16 {
         let result = base.wrapping_add_signed(offset as i16);
         self.cpu.f.set_z(false);
@@ -1342,6 +1468,7 @@ impl Machine {
         result
     }
 
+    // Decode the low three operand bits as B/C/D/E/H/L/(HL)/A; (HL) uses the traced CPU bus.
     fn read_r8(&mut self, index: u8) -> u8 {
         match index & 0x07 {
             0 => self.cpu.b,
@@ -1355,6 +1482,7 @@ impl Machine {
         }
     }
 
+    // Decode the register operand and route (HL) stores through normal device/access restrictions.
     fn write_r8(&mut self, index: u8, value: u8) {
         match index & 0x07 {
             0 => self.cpu.b = value,
@@ -1371,20 +1499,25 @@ impl Machine {
         }
     }
 
+    // Combine B and C as a big-endian register pair, independently of memory byte order.
     fn ld_bc(&self) -> u16 {
         ((self.cpu.b as u16) << 8) | self.cpu.c as u16
     }
+    // Split a 16-bit value into the B high byte and C low byte.
     fn set_bc(&mut self, value: u16) {
         self.cpu.b = (value >> 8) as u8;
         self.cpu.c = value as u8;
     }
+    // Combine D and E into the 16-bit register pair.
     fn ld_de(&self) -> u16 {
         ((self.cpu.d as u16) << 8) | self.cpu.e as u16
     }
+    // Split a 16-bit value into the D high byte and E low byte.
     fn set_de(&mut self, value: u16) {
         self.cpu.d = (value >> 8) as u8;
         self.cpu.e = value as u8;
     }
+    // Add modulo 65536 into HL, update N/H/C at bit 11/15 boundaries and preserve Z.
     fn add_hl(&mut self, value: u16) {
         let hl = self.cpu.hl();
         let result = hl.wrapping_add(value);
@@ -1396,13 +1529,17 @@ impl Machine {
         self.cpu.set_hl(result);
     }
 
+    // Increment modulo 65536 without changing CPU flags.
     fn inc16(value: u16) -> u16 {
         value.wrapping_add(1)
     }
+    // Decrement modulo 65536 without changing CPU flags.
     fn dec16(value: u16) -> u16 {
         value.wrapping_sub(1)
     }
 
+    // Acknowledge the highest enabled pending interrupt, disable IME, push PC and enter
+    // its vector. HALT wake-up and charging the 20-cycle service step belong to the caller.
     fn service_interrupt(&mut self) -> Result<(), error::CoreError> {
         if let Some((mask, vector)) = self.interrupt.highest_priority() {
             self.cpu.ime = false;
@@ -1423,10 +1560,12 @@ impl Machine {
         }
     }
 
+    // Require both CGB hardware mode and its active double-speed flag.
     fn cgb_fast_domains_enabled(&self) -> bool {
         self.mode == HardwareMode::Cgb && self.cgb_double_speed
     }
 
+    // Convert double-speed CPU cycles to PPU cycles by floor division; otherwise keep them unchanged.
     fn cpu_cycles_to_ppu_cycles(&self, cpu_cycles: u32) -> u32 {
         if self.cgb_fast_domains_enabled() {
             cpu_cycles / 2
@@ -1435,6 +1574,7 @@ impl Machine {
         }
     }
 
+    // Round up when converting an odd double-speed interval to PPU cycles, using saturating addition.
     fn cpu_cycles_to_ppu_cycles_ceil(&self, cpu_cycles: u32) -> u32 {
         if self.cgb_fast_domains_enabled() {
             (cpu_cycles.saturating_add(1)) / 2
@@ -1443,6 +1583,7 @@ impl Machine {
         }
     }
 
+    // Scale a PPU interval into the current CPU clock domain with saturating multiplication.
     fn ppu_cycles_to_cpu_cycles(&self, ppu_cycles: u32) -> u32 {
         if self.cgb_fast_domains_enabled() {
             ppu_cycles.saturating_mul(2)
@@ -1451,6 +1592,7 @@ impl Machine {
         }
     }
 
+    // Express the modeled 32-base-cycle DMA block stall in current CPU-cycle units.
     fn hdma_block_stall_cycles(&self) -> u32 {
         if self.cgb_fast_domains_enabled() {
             CGB_DMA_BLOCK_STALL_CYCLES.saturating_mul(2)
@@ -1459,6 +1601,8 @@ impl Machine {
         }
     }
 
+    // Consume pending CPU stalls, advance device clocks and drain pending observations into
+    // StepResult. Commit delayed IME enable only after clock and trace finalization.
     fn finish_step(&mut self, cycles: u32) -> StepResult {
         let total_cycles =
             cycles.saturating_add(std::mem::take(&mut self.pending_cpu_stall_cycles));
@@ -1471,6 +1615,8 @@ impl Machine {
             io_trace_from_clocks,
             apu_trace_from_clocks,
         ) = self.advance_clocks(total_cycles, total_ppu_cycles);
+        // Place pending write-side observations before clock-generated observations within each trace family.
+        // Separate family vectors do not by themselves encode one globally interleaved event order.
         let mut dma_trace = std::mem::take(&mut self.pending_dma_trace);
         dma_trace.extend(dma_trace_from_clocks);
         let mut mapper_trace = std::mem::take(&mut self.pending_mapper_trace);
@@ -1495,6 +1641,8 @@ impl Machine {
         }
     }
 
+    // Consume stalls and advance fast clocks, then clear transient observations and commit
+    // delayed IME enable; this path returns no per-step trace result.
     fn finish_step_fast(&mut self, cycles: u32) {
         let total_cycles =
             cycles.saturating_add(std::mem::take(&mut self.pending_cpu_stall_cycles));
@@ -1504,6 +1652,8 @@ impl Machine {
         self.commit_ime_enable_delay();
     }
 
+    // Discard all pending device traces and aggregated diagnostic history, preserving
+    // the diagnostic-enabled flag. Fast execution therefore does not retain diagnostic aggregates.
     fn clear_pending_traces(&mut self) {
         self.pending_dma_trace.clear();
         self.pending_mapper_trace.clear();
@@ -1514,6 +1664,7 @@ impl Machine {
         self.diagnostic_events.clear();
     }
 
+    // Count down the deferred EI state at completed-step boundaries and enable IME when it reaches zero.
     fn commit_ime_enable_delay(&mut self) {
         if self.cpu.ime_enable_delay > 0 {
             self.cpu.ime_enable_delay -= 1;
@@ -1523,6 +1674,9 @@ impl Machine {
         }
     }
 
+    // Advance CPU-rate devices and base-rate display/audio devices in boundary-limited
+    // chunks, collecting observations. HBlank DMA can extend the remaining work during this call.
+    // During speed-switch freeze, only the CPU clock total advances; device/frame timing pauses.
     fn advance_clocks(
         &mut self,
         cpu_cycles: u32,
@@ -1540,6 +1694,7 @@ impl Machine {
         let mut frame_completed = false;
         let mut ppu_trace = Vec::new();
         let mut dma_trace = Vec::new();
+        // The current clock path advances the mapper without producing mapper trace entries in this return vector.
         let mapper_trace = Vec::new();
         let mut io_trace = Vec::new();
         let mut apu_trace = Vec::new();
@@ -1556,6 +1711,7 @@ impl Machine {
             if remaining_ppu == 0 {
                 let fast_only = remaining_cpu;
                 self.clocks.cycles += fast_only as u64;
+                // A residual CPU-only interval advances timer, standalone serial and OAM DMA, but not PPU/APU/mapper.
                 let timer_result = self.timer.tick(fast_only);
                 io_trace.extend(timer_result.trace.into_iter().map(IoTraceEvent::Timer));
                 if timer_result.interrupt_requested {
@@ -1621,6 +1777,8 @@ impl Machine {
             if self.dma.active {
                 self.tick_dma(step_cpu, &mut dma_trace);
             }
+            // Charge HBlank DMA stalls as additional work inside this advancement. These extra
+            // cycles are not retroactively added to finish_step's already computed StepResult.cycles.
             for event in &ppu_result.trace {
                 if let types::PpuTraceEvent::PpuModeChange { to_mode, .. } = *event {
                     if to_mode == ppu::PpuMode::HBlank as u8 {
@@ -1654,6 +1812,9 @@ impl Machine {
         )
     }
 
+    // Advance the same device domains using their fast tick APIs, retaining functional
+    // interrupt requests and rendering but not returning observation vectors. The same
+    // speed-switch freeze pauses device/frame timing while CPU clock totals advance.
     fn advance_clocks_fast(&mut self, cpu_cycles: u32, ppu_cycles: u32) -> bool {
         let mut remaining_cpu = cpu_cycles;
         let mut remaining_ppu = ppu_cycles;
@@ -1675,6 +1836,7 @@ impl Machine {
                 if self.timer.tick_fast(fast_only) {
                     self.request_interrupt(INT_TIMER, InterruptSource::Timer);
                 }
+                // An attached cable delegates byte completion to the cooperative runner instead of open-bus serial ticking.
                 if !self.serial_link_attached && self.serial.tick_fast(fast_only) {
                     self.request_interrupt(INT_SERIAL, InterruptSource::Serial);
                 }
@@ -1745,6 +1907,8 @@ impl Machine {
         frame_completed
     }
 
+    // Refresh raw APU/wave/PCM mirrors from readable device values, including wave-access
+    // restrictions and FF PCM taps outside CGB mode.
     fn sync_apu_memory(&mut self) {
         for addr in 0xFF10..=0xFF26 {
             self.memory.write8(addr, self.apu.read(addr));
@@ -1770,6 +1934,8 @@ impl Machine {
         );
     }
 
+    // Refresh KEY1, bank and palette mirrors from live CGB state; unsupported DMG reads
+    // and currently blocked palette data are mirrored as FF.
     fn sync_cgb_memory(&mut self) {
         self.memory.write8(0xFF4D, self.read_key1());
         self.memory.write8(
@@ -1824,12 +1990,14 @@ impl Machine {
         );
     }
 
+    // Block CGB palette data only during an enabled-LCD transfer period.
     fn cgb_palette_access_blocked(&self) -> bool {
         self.mode == HardwareMode::Cgb
             && self.ppu.lcd_enabled()
             && self.ppu.current_mode() == ppu::PpuMode::Transfer
     }
 
+    // Expose speed and prepared-switch bits with unused bits high, or FF outside CGB mode.
     fn read_key1(&self) -> u8 {
         if self.mode != HardwareMode::Cgb {
             return 0xFF;
@@ -1837,6 +2005,7 @@ impl Machine {
         ((self.cgb_double_speed as u8) << 7) | (self.cgb_speed_switch_armed as u8) | 0x7E
     }
 
+    // In CGB mode, update only the prepared-switch bit, synchronize mirrors and record the write.
     fn write_key1(&mut self, value: u8) {
         if self.mode != HardwareMode::Cgb {
             return;
@@ -1850,6 +2019,8 @@ impl Machine {
         });
     }
 
+    // Require an armed CGB switch, toggle speed and consume the arm. Add the modeled
+    // 8200-cycle freeze to both the freeze counter and pending CPU stall budget.
     fn perform_speed_switch(&mut self) {
         if self.mode != HardwareMode::Cgb || !self.cgb_speed_switch_armed {
             return;
@@ -1874,6 +2045,7 @@ impl Machine {
             });
     }
 
+    // Request the joypad interrupt for edge events and retain every event as pending I/O evidence.
     fn capture_joypad_trace(&mut self, trace: Vec<JoypadTraceEvent>) {
         for event in trace {
             if let JoypadTraceEvent::InterruptEdge { .. } = event {
@@ -1883,6 +2055,8 @@ impl Machine {
         }
     }
 
+    // Set the IF source bit and record a request only when IF actually changes. Repeated
+    // requests for an already pending source do not add another Requested event.
     fn request_interrupt(&mut self, mask: u8, source: InterruptSource) {
         let before = self.interrupt.iflag;
         self.interrupt.request(mask);
@@ -1895,6 +2069,7 @@ impl Machine {
         }
     }
 
+    // Map a single recognized interrupt bit to its trace identity; the fallback is joypad.
     fn interrupt_source_from_mask(&self, mask: u8) -> InterruptSource {
         match mask {
             INT_VBLANK => InterruptSource::Vblank,
@@ -1905,6 +2080,8 @@ impl Machine {
         }
     }
 
+    // Apply this model's OAM-DMA bus gates: DMG retains only HRAM access, while CGB
+    // blocks the source bus and OAM. This helper does not model every possible bus-contention detail.
     fn dma_blocks_cpu_access(&self, addr: u16) -> bool {
         if !self.dma.active {
             return false;
@@ -1929,6 +2106,8 @@ impl Machine {
         }
     }
 
+    // Read DMA source bytes without CPU bus gates or read traces, retaining cartridge mapping.
+    // Other regions use raw memory mirrors rather than live CPU-I/O handlers.
     fn read8_for_dma(&self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x7FFF => self.cartridge.read_rom(addr),
@@ -1937,6 +2116,7 @@ impl Machine {
         }
     }
 
+    // Model the DMG-only STAT write effect when LCD is on and coincidence or a non-transfer mode is active.
     fn dmg_stat_write_causes_spurious_interrupt(&self) -> bool {
         if self.mode != HardwareMode::Dmg || !self.ppu.lcd_enabled() {
             return false;
@@ -1949,6 +2129,8 @@ impl Machine {
             )
     }
 
+    // Consume startup delay, then copy OAM bytes at four CPU cycles per byte and emit completion.
+    // Callers keep chunks bounded: the residual cycle count is narrowed to u8 before accumulation.
     fn tick_dma(&mut self, cycles: u32, trace: &mut Vec<DmaTraceEvent>) {
         if !self.dma.active {
             return;
@@ -1986,6 +2168,8 @@ impl Machine {
         }
     }
 
+    // Bound scheduling by remaining startup delay or the next four-cycle byte deadline;
+    // inactive DMA returns the no-event sentinel.
     fn cycles_until_next_dma_event(&self) -> u32 {
         if !self.dma.active {
             return u32::MAX;
@@ -1993,18 +2177,23 @@ impl Machine {
         if self.dma.start_delay_cycles > 0 {
             return u32::from(self.dma.start_delay_cycles);
         }
+        // Keep OAM copies bounded by their next byte deadline even when PPU mode boundaries are farther away.
         let pending = 4u8.saturating_sub(self.dma.cycle_accum);
         u32::from(pending.max(1))
     }
 
+    // Combine the source registers into a sixteen-byte-aligned bus address.
     fn hdma_source_from_regs(&self) -> u16 {
         ((self.dma.hdma1 as u16) << 8) | u16::from(self.dma.hdma2 & 0xF0)
     }
 
+    // Combine masked destination registers into a sixteen-byte-aligned VRAM bus address.
     fn hdma_dest_from_regs(&self) -> u16 {
         0x8000 | (((self.dma.hdma3 as u16 & 0x1F) << 8) | u16::from(self.dma.hdma4 & 0xF0))
     }
 
+    // Mirror current aligned addresses and encode active, canceled-with-remaining or
+    // fully completed status in FF55.
     fn sync_hdma_registers(&mut self) {
         let source = self.dma.hdma_source;
         let dest_offset = self.dma.hdma_dest.wrapping_sub(0x8000);
@@ -2026,6 +2215,8 @@ impl Machine {
         self.memory.write8(0xFF55, self.dma.hdma5);
     }
 
+    // Copy one sixteen-byte block into the currently selected VRAM bank, wrap destination
+    // within VRAM and update counters/registers. Clock stalls are reported and charged by callers.
     fn transfer_hdma_block(&mut self, hblank_mode: bool, trace: &mut Vec<DmaTraceEvent>) {
         if !self.dma.hdma_active || self.dma.hdma_blocks_remaining == 0 {
             return;
@@ -2033,6 +2224,7 @@ impl Machine {
 
         let source = self.dma.hdma_source;
         let dest = self.dma.hdma_dest;
+        // Identify the current block from total minus remaining before decrementing the transfer count.
         let block_index = self
             .dma
             .hdma_total_blocks
@@ -2071,6 +2263,8 @@ impl Machine {
         self.sync_hdma_registers();
     }
 
+    // On an active HBlank transfer, defer while CPU is halted; otherwise copy one block
+    // and return its current-speed CPU stall estimate.
     fn tick_hdma_hblank(&mut self, trace: &mut Vec<DmaTraceEvent>) -> u32 {
         if self.dma.hdma_active && self.dma.hdma_hblank_mode {
             if self.cpu.halted {
@@ -2087,6 +2281,8 @@ impl Machine {
         0
     }
 
+    // Ignore DMA start outside CGB mode. Cancel or ignore writes during active HBlank
+    // DMA; otherwise arm a new transfer, executing GDMA blocks immediately and deferring their cycle charge.
     fn write_hdma_control(&mut self, value: u8) {
         if self.mode != HardwareMode::Cgb {
             self.dma.hdma5 = 0xFF;
@@ -2130,6 +2326,8 @@ impl Machine {
         });
         self.sync_hdma_registers();
 
+        // GDMA writes all bytes now; pending_cpu_stall_cycles makes a later completed step
+        // advance devices through the modeled stall duration.
         if !self.dma.hdma_hblank_mode {
             let mut trace = std::mem::take(&mut self.pending_dma_trace);
             let gdma_blocks = self.dma.hdma_blocks_remaining;
@@ -2148,10 +2346,12 @@ impl Machine {
         }
     }
 
+    // Use the ordinary register/(HL) bus write path for CB results; memory restrictions still apply.
     fn write_r8_cb(&mut self, index: u8, value: u8) {
         self.write_r8(index, value);
     }
 
+    // Rotate bit 7 into bit 0 and carry; CB rotations set Z from the result and clear N/H.
     fn cb_rlc(&mut self, value: u8) -> u8 {
         let carry = (value & 0x80) != 0;
         let result = (value << 1) | if carry { 1 } else { 0 };
@@ -2162,6 +2362,7 @@ impl Machine {
         result
     }
 
+    // Rotate bit 0 into bit 7 and carry; set Z from the result and clear N/H.
     fn cb_rrc(&mut self, value: u8) -> u8 {
         let carry = (value & 0x01) != 0;
         let result = (value >> 1) | if carry { 0x80 } else { 0 };
@@ -2172,6 +2373,7 @@ impl Machine {
         result
     }
 
+    // Shift left through the old carry, exporting bit 7; update Z and clear N/H.
     fn cb_rl(&mut self, value: u8) -> u8 {
         let carry_in = if self.cpu.f.c() { 1 } else { 0 };
         let carry = (value & 0x80) != 0;
@@ -2183,6 +2385,7 @@ impl Machine {
         result
     }
 
+    // Shift right through the old carry, exporting bit 0; update Z and clear N/H.
     fn cb_rr(&mut self, value: u8) -> u8 {
         let carry_in = if self.cpu.f.c() { 0x80 } else { 0 };
         let carry = (value & 0x01) != 0;
@@ -2194,6 +2397,7 @@ impl Machine {
         result
     }
 
+    // Shift left with a zero low bit, exporting bit 7 to carry; update Z and clear N/H.
     fn cb_sla(&mut self, value: u8) -> u8 {
         let carry = (value & 0x80) != 0;
         let result = value << 1;
@@ -2204,6 +2408,7 @@ impl Machine {
         result
     }
 
+    // Preserve the sign bit while shifting right; export bit 0, update Z and clear N/H.
     fn cb_sra(&mut self, value: u8) -> u8 {
         let carry = (value & 0x01) != 0;
         let result = (value >> 1) | (value & 0x80);
@@ -2214,6 +2419,7 @@ impl Machine {
         result
     }
 
+    // Exchange high and low nibbles, set Z from the result and clear N/H/C.
     fn cb_swap(&mut self, value: u8) -> u8 {
         let result = value.rotate_left(4);
         self.cpu.f.set_z(result == 0);
@@ -2223,6 +2429,7 @@ impl Machine {
         result
     }
 
+    // Shift right with a zero high bit; export bit 0, update Z and clear N/H.
     fn cb_srl(&mut self, value: u8) -> u8 {
         let carry = (value & 0x01) != 0;
         let result = value >> 1;
@@ -2233,6 +2440,8 @@ impl Machine {
         result
     }
 
+    // Decode operation group, bit/rotation selector and register target. Returned cycles
+    // include the CB prefix; (HL) costs 12 for BIT and 16 for read-modify-write operations.
     fn execute_cb_opcode(&mut self, opcode: u8) -> u32 {
         let target = opcode & 0x07;
         let group = opcode >> 6;
@@ -2259,6 +2468,7 @@ impl Machine {
             }
             1 => {
                 let value = self.read_r8(target);
+                // BIT only tests the operand: preserve carry and do not write back to memory.
                 let bit = (value >> y) & 1;
                 self.cpu.f.set_z(bit == 0);
                 self.cpu.f.set_n(false);
@@ -2270,6 +2480,7 @@ impl Machine {
                 }
             }
             2 => {
+                // RES and SET preserve all flags, including when their target is (HL).
                 let value = self.read_r8(target) & !(1 << y);
                 self.write_r8_cb(target, value);
                 if target == 6 {
@@ -2290,7 +2501,12 @@ impl Machine {
         }
     }
 
+    // Execute an already fetched opcode with PC pointing to its operands. Fetch operands
+    // through the CPU bus and return instruction cycles; the caller advances devices afterward.
+    // Selected loads predict PPU register values at a read offset rather than ticking each bus access.
     fn execute_opcode(&mut self, opcode: u8) -> Result<u32, error::CoreError> {
+        // Handle the complete LD register matrix here, including (HL); reserve 76 for HALT.
+        // This early return also means the later individual LD arms are not reached.
         if (0x40..=0x7F).contains(&opcode) && opcode != 0x76 {
             let dst = (opcode >> 3) & 0x07;
             let src = opcode & 0x07;
@@ -2298,6 +2514,8 @@ impl Machine {
             self.write_r8(dst, value);
             return Ok(if dst == 6 || src == 6 { 8 } else { 4 });
         }
+        // Decode the eight contiguous accumulator ALU families before the sparse table.
+        // Their later individual arms are retained but cannot be reached through this entry point.
         if (0x80..=0x87).contains(&opcode) {
             let v = self.read_r8(opcode & 0x07);
             self.add_a(v);
@@ -2340,6 +2558,7 @@ impl Machine {
         }
         match opcode {
             0x00 => Ok(4),
+            // LD BC,d16: read a little-endian immediate; pair loads and INC/DEC pairs preserve flags.
             0x01 => {
                 let value = self.read16_imm();
                 self.set_bc(value);
@@ -2372,6 +2591,7 @@ impl Machine {
                 self.rlca();
                 Ok(4)
             }
+            // LD A,(BC): predict time-sensitive PPU reads four CPU cycles after instruction start.
             0x0A => {
                 self.cpu.a = self.read8_timed(self.ld_bc(), 4);
                 Ok(8)
@@ -2403,6 +2623,8 @@ impl Machine {
                 self.rrca();
                 Ok(4)
             }
+            // STOP always consumes its padding byte. An armed CGB switch changes speed;
+            // otherwise this implementation uses the same halted state as HALT.
             0x10 => {
                 let _stop_padding = self.read8(self.cpu.pc);
                 self.cpu.pc = self.cpu.pc.wrapping_add(1);
@@ -2414,6 +2636,7 @@ impl Machine {
                     Ok(4)
                 }
             }
+            // LD (a16),SP stores low then high bytes through the bus, wrapping the second address.
             0x08 => {
                 let addr = self.read16_imm();
                 let sp = self.cpu.sp;
@@ -2466,6 +2689,7 @@ impl Machine {
                 self.rla();
                 Ok(4)
             }
+            // JR adds a signed byte displacement to PC after consuming that operand.
             0x18 => {
                 let offset = self.read8(self.cpu.pc) as i8;
                 self.cpu.pc = self.cpu.pc.wrapping_add(1);
@@ -2486,6 +2710,7 @@ impl Machine {
                 self.cpu.e = value;
                 Ok(8)
             }
+            // RRA rotates through carry and forces Z clear, unlike its CB-prefixed counterpart.
             0x1F => {
                 let carry = if self.cpu.f.c() { 0x80 } else { 0 };
                 let new_carry = (self.cpu.a & 0x01) != 0;
@@ -2496,6 +2721,8 @@ impl Machine {
                 self.cpu.f.set_c(new_carry);
                 Ok(4)
             }
+            // Conditional JR always consumes the displacement; taking it adds four cycles.
+            // The Z/C variants below follow the same operand and timing rule.
             0x20 => {
                 let offset = self.read8(self.cpu.pc) as i8;
                 self.cpu.pc = self.cpu.pc.wrapping_add(1);
@@ -2516,6 +2743,7 @@ impl Machine {
                 self.cpu.set_hl(value);
                 Ok(8)
             }
+            // LD (HL+),A writes at the old HL address, then increments the pair with wrapping.
             0x22 => {
                 let addr = self.cpu.hl();
                 self.write8(addr, self.cpu.a);
@@ -2550,6 +2778,7 @@ impl Machine {
                     Ok(8)
                 }
             }
+            // LD A,(HL+) reads at the old address before incrementing HL.
             0x2A => {
                 let addr = self.cpu.hl();
                 self.cpu.a = self.read8_timed(addr, 4);
@@ -2579,6 +2808,7 @@ impl Machine {
                 self.cpu.l = value;
                 Ok(8)
             }
+            // CPL complements A and sets N/H while retaining Z/C.
             0x2F => {
                 self.cpu.a ^= 0xFF;
                 self.cpu.f.set_n(true);
@@ -2603,6 +2833,7 @@ impl Machine {
                 self.cpu.sp = Self::inc16(self.cpu.sp);
                 Ok(8)
             }
+            // LD (HL-),A writes before decrementing HL; the matching load also reads first.
             0x32 => {
                 let addr = self.cpu.hl();
                 self.write8(addr, self.cpu.a);
@@ -2623,6 +2854,7 @@ impl Machine {
                 self.cpu.sp = Self::dec16(self.cpu.sp);
                 Ok(8)
             }
+            // INC/DEC (HL) use bus reads and writes, with the same flags as register INC/DEC.
             0x34 => {
                 let addr = self.cpu.hl();
                 let value = self.read8(addr);
@@ -2643,6 +2875,7 @@ impl Machine {
                 self.write8(self.cpu.hl(), value);
                 Ok(12)
             }
+            // SCF sets carry and clears N/H without changing Z.
             0x37 => {
                 self.cpu.f.set_n(false);
                 self.cpu.f.set_h(false);
@@ -2673,6 +2906,7 @@ impl Machine {
                 self.cpu.a = value;
                 Ok(8)
             }
+            // CCF complements carry and clears N/H without changing Z.
             0x3F => {
                 let c = self.cpu.f.c();
                 self.cpu.f.set_n(false);
@@ -2680,6 +2914,7 @@ impl Machine {
                 self.cpu.f.set_c(!c);
                 Ok(4)
             }
+            // The LD matrix above returns first for these legacy arms; HALT at 76 is the exception.
             0x40 => Ok(4),
             0x41 => {
                 self.cpu.b = self.cpu.c;
@@ -2822,6 +3057,8 @@ impl Machine {
                 self.cpu.l = self.cpu.a;
                 Ok(4)
             }
+            // With IME clear and an enabled interrupt already pending, suppress the next opcode
+            // fetch increment instead of sleeping. Otherwise wait in the halted state.
             0x76 => {
                 if !self.cpu.ime && self.interrupt.has_pending() {
                     self.cpu.halt_bug = true;
@@ -2865,6 +3102,7 @@ impl Machine {
                 self.cpu.a = self.read8_timed(addr, 4);
                 Ok(8)
             }
+            // The ALU family dispatch above handles 80 through BF before reaching these legacy arms.
             0x80 => {
                 self.add_a(self.cpu.b);
                 Ok(4)
@@ -3129,11 +3367,13 @@ impl Machine {
                 self.cp_a(self.cpu.a);
                 Ok(4)
             }
+            // Fetch the second opcode and return the CB decoder's complete two-byte timing.
             0xCB => {
                 let op = self.read8(self.cpu.pc);
                 self.cpu.pc = self.cpu.pc.wrapping_add(1);
                 Ok(self.execute_cb_opcode(op))
             }
+            // Conditional RET touches the stack only when taken: 20 cycles taken, eight otherwise.
             0xC0 => {
                 if !self.cpu.f.z() {
                     self.cpu.pc = self.pop16();
@@ -3147,6 +3387,7 @@ impl Machine {
                 self.set_bc(value);
                 Ok(12)
             }
+            // Conditional JP consumes both address bytes even when the branch is not taken.
             0xC2 => {
                 let addr = self.read16_imm();
                 if !self.cpu.f.z() {
@@ -3160,6 +3401,7 @@ impl Machine {
                 self.cpu.pc = self.read16_imm();
                 Ok(16)
             }
+            // Conditional CALL consumes its address first and pushes the following PC only when taken.
             0xC4 => {
                 let addr = self.read16_imm();
                 if !self.cpu.f.z() {
@@ -3174,6 +3416,7 @@ impl Machine {
                 self.push16(self.ld_bc());
                 Ok(16)
             }
+            // RST pushes the following PC and jumps to its fixed eight-byte-spaced vector.
             0xC7 => {
                 self.push16(self.cpu.pc);
                 self.cpu.pc = 0x00;
@@ -3318,12 +3561,14 @@ impl Machine {
                 self.sbc_a(v);
                 Ok(8)
             }
+            // RETI restores PC and immediately enables IME, clearing the active-handler diagnostic marker.
             0xD9 => {
                 self.cpu.pc = self.pop16();
                 self.cpu.ime = true;
                 self.active_interrupt_vector = None;
                 Ok(16)
             }
+            // LDH (a8),A maps an unsigned offset into FF00-FFFF through ordinary I/O bus handling.
             0xE0 => {
                 let offset = self.read8(self.cpu.pc) as u16;
                 self.cpu.pc = self.cpu.pc.wrapping_add(1);
@@ -3354,6 +3599,7 @@ impl Machine {
                 self.and_a(v);
                 Ok(8)
             }
+            // LDH A,(a8) samples PPU timing eight cycles after instruction start; the C-indexed form uses four.
             0xF0 => {
                 let offset = self.read8(self.cpu.pc) as u16;
                 self.cpu.pc = self.cpu.pc.wrapping_add(1);
@@ -3384,17 +3630,20 @@ impl Machine {
                 self.cpu.pc = 0x28;
                 Ok(16)
             }
+            // POP AF discards the unused low flag nibble; PUSH AF below masks it as well.
             0xF1 => {
                 let value = self.pop16();
                 self.cpu.a = (value >> 8) as u8;
                 self.cpu.f.0 = (value as u8) & 0xF0;
                 Ok(12)
             }
+            // DI disables interrupts now and cancels any pending delayed EI enable.
             0xF3 => {
                 self.cpu.ime = false;
                 self.cpu.ime_enable_delay = 0;
                 Ok(4)
             }
+            // ADD SP,r8 and LD HL,SP+r8 share signed arithmetic and low-byte half-carry/carry rules.
             0xE8 => {
                 let offset = self.read8(self.cpu.pc) as i8;
                 self.cpu.pc = self.cpu.pc.wrapping_add(1);
@@ -3402,6 +3651,8 @@ impl Machine {
                 self.cpu.sp = result;
                 Ok(16)
             }
+            // This implementation also accepts F4 as a conditional call when carry is clear.
+            // Keep this explicit behavior distinct from the unsupported-opcode fallback.
             0xF4 => {
                 let addr = self.read16_imm();
                 if !self.cpu.f.c() {
@@ -3444,6 +3695,7 @@ impl Machine {
                 self.cpu.pc = 0x30;
                 Ok(16)
             }
+            // EI schedules enablement after the following instruction: finalization consumes one delay unit now.
             0xFB => {
                 self.cpu.ime_enable_delay = 2;
                 Ok(4)
@@ -3459,6 +3711,7 @@ impl Machine {
                 self.cp_a(value);
                 Ok(8)
             }
+            // Report an unsupported opcode after its fetch; this error path does not roll back PC or bus effects.
             _ => Err(error::CoreError::UnsupportedOpcode {
                 opcode,
                 pc: self.cpu.pc.wrapping_sub(1),
@@ -3468,6 +3721,7 @@ impl Machine {
 }
 
 impl Default for Machine {
+    // Use the same uninitialized-cartridge machine construction as Machine::new.
     fn default() -> Self {
         Self::new()
     }
@@ -3482,6 +3736,8 @@ mod tests {
         JoypadTraceEvent, MapperTraceEvent, SerialTraceEvent, TimerTraceEvent,
     };
 
+    // Place a bounded synthetic program at the post-boot entry point in a zero-filled
+    // 32 KiB ROM-only image. This helper does not add a boot logo or validate the program length.
     fn make_test_rom(program: &[u8]) -> Vec<u8> {
         let mut rom = vec![0u8; 0x8000];
         rom[0x147] = 0x00;
@@ -3492,25 +3748,130 @@ mod tests {
         rom
     }
 
+    // Load the synthetic ROM through normal initialization so tests start from DMG post-boot state.
     fn make_machine(program: &[u8]) -> Machine {
         let mut machine = Machine::new();
         machine.load_rom(make_test_rom(program)).unwrap();
         machine
     }
 
+    // Override the CGB header byte after installing the synthetic program.
     fn make_cgb_test_rom(program: &[u8], cgb_flag: u8) -> Vec<u8> {
         let mut rom = make_test_rom(program);
         rom[0x143] = cgb_flag;
         rom
     }
 
+    // Load a dual-mode fixture with automatic CGB selection.
     fn make_cgb_machine(program: &[u8]) -> Machine {
         let mut machine = Machine::new();
         machine.load_rom(make_cgb_test_rom(program, 0x80)).unwrap();
         machine
     }
 
+    // Exercise real HALT entry, IRQ arrival and the next instruction on both execution paths.
+    // Include DMG and both CGB speeds, with and without interrupt servicing enabled.
     #[test]
+    fn pending_enabled_interrupt_wakes_halt_in_traced_and_fast_execution() {
+        for (cgb, double_speed) in [(false, false), (true, false), (true, true)] {
+            for ime in [false, true] {
+                for fast in [false, true] {
+                    let mut rom = make_test_rom(&[0x76, 0x3E, 0x42]);
+                    rom[0x143] = if cgb { 0x80 } else { 0 };
+                    rom[0x0050] = 0x04; // INC B makes handler execution observable.
+                    rom[0x0051] = 0xD9; // RETI returns to the instruction after HALT.
+                    let mut machine = Machine::new();
+                    machine.load_rom(rom).unwrap();
+                    machine.cgb_double_speed = double_speed;
+                    machine.cpu.ime = ime;
+                    machine.interrupt.ie = INT_TIMER;
+                    machine.interrupt.iflag = 0;
+                    machine.cpu.b = 0;
+
+                    let step = |machine: &mut Machine| {
+                        if fast {
+                            machine.step_instruction_fast().unwrap();
+                        } else {
+                            machine.step_instruction().unwrap();
+                        }
+                    };
+                    step(&mut machine);
+                    assert!(machine.cpu.halted);
+                    assert_eq!(machine.cpu.pc, 0x0101);
+                    assert_eq!(machine.clocks.cycles, 4);
+
+                    machine.interrupt.iflag = INT_TIMER;
+                    step(&mut machine);
+                    assert!(!machine.cpu.halted,
+                        "HALT wake failed: cgb={cgb}, double_speed={double_speed}, ime={ime}, fast={fast}");
+                    assert!(!machine.cpu.halt_bug);
+                    if ime {
+                        assert_eq!(machine.cpu.pc, 0x0050);
+                        assert_eq!(machine.cpu.sp, 0xFFFC);
+                        assert_eq!(machine.peek8(0xFFFC), 0x01);
+                        assert_eq!(machine.peek8(0xFFFD), 0x01);
+                        assert_eq!(machine.interrupt.iflag & INT_TIMER, 0);
+                        assert!(!machine.cpu.ime);
+                        assert_eq!(machine.clocks.cycles, 24);
+                        step(&mut machine);
+                        assert_eq!(machine.cpu.b, 1);
+                        assert_eq!(machine.cpu.pc, 0x0051);
+                        step(&mut machine);
+                        assert!(machine.cpu.ime);
+                        assert_eq!(machine.cpu.pc, 0x0101);
+                        assert_eq!(machine.cpu.sp, 0xFFFE);
+                        step(&mut machine);
+                        assert_eq!(machine.clocks.cycles, 52);
+                    } else {
+                        // Wake without servicing: execute the following load and leave IF pending.
+                        assert_eq!(machine.interrupt.iflag & INT_TIMER, INT_TIMER);
+                        assert_eq!(machine.cpu.sp, 0xFFFE);
+                        assert!(!machine.cpu.ime);
+                        assert_eq!(machine.clocks.cycles, 12);
+                    }
+                    assert_eq!(machine.cpu.pc, 0x0103);
+                    assert_eq!(machine.cpu.a, 0x42);
+                }
+            }
+        }
+    }
+
+    // IF alone must not wake HALT while its source is masked in IE; enabling it must wake and service.
+    #[test]
+    fn masked_interrupt_preserves_halt_until_enabled_in_both_execution_paths() {
+        for (cgb, double_speed) in [(false, false), (true, false), (true, true)] {
+            for fast in [false, true] {
+                let mut machine = if cgb { make_cgb_machine(&[0x76]) } else { make_machine(&[0x76]) };
+                machine.cgb_double_speed = double_speed;
+                machine.cpu.ime = true;
+                machine.interrupt.ie = 0;
+                machine.interrupt.iflag = 0;
+                let step = |machine: &mut Machine| {
+                    if fast {
+                        machine.step_instruction_fast().unwrap();
+                    } else {
+                        machine.step_instruction().unwrap();
+                    }
+                };
+                step(&mut machine);
+                machine.interrupt.iflag = INT_TIMER;
+                step(&mut machine);
+                assert!(machine.cpu.halted);
+                assert_eq!(machine.cpu.pc, 0x0101);
+                assert_eq!(machine.cpu.sp, 0xFFFE);
+                assert_eq!(machine.clocks.cycles, 8);
+                machine.interrupt.ie = INT_TIMER;
+                step(&mut machine);
+                assert!(!machine.cpu.halted);
+                assert_eq!(machine.cpu.pc, 0x0050);
+                assert_eq!(machine.interrupt.iflag & INT_TIMER, 0);
+                assert_eq!(machine.clocks.cycles, 28);
+            }
+        }
+    }
+
+    #[test]
+    // Keep a timer IRQ pending across EI and NOP; check delayed IME, then service vector, stack and IF.
     fn ei_is_applied_after_the_following_instruction() {
         let mut machine = make_machine(&[0xFB, 0x00, 0x00]);
         machine.interrupt.ie = INT_TIMER;
@@ -3532,6 +3893,7 @@ mod tests {
     }
 
     #[test]
+    // Execute EI followed immediately by DI and verify the pending timer request is not serviced.
     fn di_cancels_delayed_ei_enable() {
         let mut machine = make_machine(&[0xFB, 0xF3, 0x00]);
         machine.interrupt.ie = INT_TIMER;
@@ -3551,6 +3913,7 @@ mod tests {
     }
 
     #[test]
+    // Use LD A,d8 after HALT to expose the suppressed fetch increment: A receives the opcode byte.
     fn halt_with_pending_interrupt_and_ime_clear_triggers_halt_bug() {
         let mut machine = make_machine(&[0x76, 0x3E, 0x12]);
         machine.interrupt.ie = INT_TIMER;
@@ -3569,6 +3932,7 @@ mod tests {
     }
 
     #[test]
+    // Disable the LCD and check nominal frame completion without advancing LY.
     fn run_frame_advances_nominal_frame_time_while_lcd_is_disabled() {
         let mut machine = make_machine(&[0x00]);
         machine.ppu.lcdc = 0x00;
@@ -3581,6 +3945,7 @@ mod tests {
     }
 
     #[test]
+    // Start just before the modeled HBlank boundary and assert mode transition plus STAT request.
     fn stat_interrupt_is_requested_on_mode_zero_entry() {
         let mut machine = make_machine(&[0x00]);
         machine.ppu.lcdc = 0x91;
@@ -3597,6 +3962,7 @@ mod tests {
     }
 
     #[test]
+    // Compare CPU-bus reads/writes with raw backing VRAM during transfer mode.
     fn vram_is_blocked_during_mode_three() {
         let mut machine = make_machine(&[0x00]);
         machine.ppu.lcdc = 0x91;
@@ -3610,6 +3976,7 @@ mod tests {
     }
 
     #[test]
+    // Check DMG bus gating, the four-cycle startup delay and final OAM endpoints after 160 bytes.
     fn oam_dma_blocks_cpu_bus_and_copies_over_time() {
         let mut machine = make_machine(&[0x00]);
         let power_on_hram = machine.memory.read8(0xFF80);
@@ -3634,6 +4001,7 @@ mod tests {
     }
 
     #[test]
+    // Exercise WRAM and cartridge DMA sources separately, including echo/HRAM and a blocked-read diagnostic.
     fn cgb_oam_dma_blocks_only_the_source_bus() {
         let mut machine = make_cgb_machine(&[0x00]);
         machine.memory.write8(0xC000, 0x12);
@@ -3660,6 +4028,7 @@ mod tests {
     }
 
     #[test]
+    // Execute PUSH AF from accessible ROM while WRAM DMA blocks its stack writes; check SP and diagnostics.
     fn cgb_wram_oam_dma_reports_stack_access_from_rom_code() {
         let mut machine = make_cgb_machine(&[0xF5]);
         machine.cpu.sp = 0xDFFF;
@@ -3678,6 +4047,8 @@ mod tests {
     }
 
     #[test]
+    // Latch empty OAM, DMA a visible sprite before HBlank and verify the rendered first pixel
+    // still uses the previously latched selection while raw OAM contains the new sprite.
     fn mid_scanline_dma_does_not_change_latched_scanline_render() {
         let mut machine = make_machine(&[0x00]);
         machine.ppu.lcdc = 0x93;
@@ -3711,6 +4082,7 @@ mod tests {
     }
 
     #[test]
+    // Change LYC to current LY with coincidence interrupts enabled and assert the immediate request.
     fn writing_matching_lyc_requests_stat_interrupt_immediately() {
         let mut machine = make_machine(&[0x00]);
         machine.ppu.lcdc = 0x91;
@@ -3724,6 +4096,7 @@ mod tests {
     }
 
     #[test]
+    // Enable the HBlank STAT source while already in that mode and check IF.
     fn enabling_hblank_stat_source_while_in_hblank_requests_interrupt() {
         let mut machine = make_machine(&[0x00]);
         machine.ppu.lcdc = 0x91;
@@ -3737,6 +4110,7 @@ mod tests {
     }
 
     #[test]
+    // Write zero to STAT during DMG OAM search and check the modeled write-triggered request.
     fn dmg_stat_write_quirk_requests_interrupt_in_oam() {
         let mut machine = make_machine(&[0x00]);
         machine.mode = HardwareMode::Dmg;
@@ -3751,6 +4125,7 @@ mod tests {
     }
 
     #[test]
+    // Verify the DMG write effect does not prevent STAT source bits from being updated and read back.
     fn dmg_stat_write_quirk_still_updates_stat_sources() {
         let mut machine = make_machine(&[0x00]);
         machine.mode = HardwareMode::Dmg;
@@ -3766,6 +4141,7 @@ mod tests {
     }
 
     #[test]
+    // Switch the machine mode to CGB and verify a zero STAT write does not request this DMG-only effect.
     fn cgb_mode_does_not_apply_dmg_stat_write_quirk() {
         let mut machine = make_machine(&[0x00]);
         machine.mode = HardwareMode::Cgb;
@@ -3780,6 +4156,7 @@ mod tests {
     }
 
     #[test]
+    // Enable the LCD with OAM STAT selected and assert OAM search plus its request.
     fn enabling_lcdc_with_oam_stat_source_requests_interrupt() {
         let mut machine = make_machine(&[0x00]);
         machine.ppu.lcdc = 0x00;
@@ -3793,6 +4170,7 @@ mod tests {
     }
 
     #[test]
+    // Start with a stale nominal frame phase and check that an LCDC write rebuilds it from LY and dot.
     fn lcdc_write_resyncs_nominal_frame_phase_to_current_ppu_position() {
         let mut machine = make_machine(&[0x00]);
         machine.ppu.lcdc = 0x91;
@@ -3809,6 +4187,7 @@ mod tests {
     }
 
     #[test]
+    // Execute LDH A,(STAT) across entry into VBlank and check the predicted read and resulting IF.
     fn ldh_ff41_samples_stat_near_the_read_microstep() {
         let mut machine = make_machine(&[0xF0, 0x41]);
         machine.interrupt.ie = 0;
@@ -3824,6 +4203,7 @@ mod tests {
     }
 
     #[test]
+    // Finish a complete synthetic OAM transfer in one call and inspect start/completion traces and endpoints.
     fn finish_step_collects_oam_dma_trace_edges() {
         let mut machine = make_machine(&[0x00]);
         for i in 0..0xA0u16 {
@@ -3842,6 +4222,7 @@ mod tests {
     }
 
     #[test]
+    // Arm two GDMA blocks and check immediate VRAM endpoints, completed FF55 and queued transfer observations.
     fn cgb_gdma_transfers_immediately_and_emits_trace() {
         let mut machine = make_machine(&[0x00]);
         machine.mode = HardwareMode::Cgb;
@@ -3890,6 +4271,8 @@ mod tests {
     }
 
     #[test]
+    // Check eight mode/control combinations for the unsafe-mode warning; canceling an armed
+    // HBlank transfer during mode 3 must not be diagnosed as an immediate transfer.
     fn hdma_diagnostics_distinguish_arming_from_immediate_transfer() {
         for (ly, dot, control, expected) in [
             (0, 0, 0x80, false),
@@ -3925,6 +4308,7 @@ mod tests {
     }
 
     #[test]
+    // Arm two blocks before HBlank, cross one boundary and check one copied block with one remaining.
     fn hblank_hdma_transfers_one_block_on_hblank_entry() {
         let mut machine = make_machine(&[0x00]);
         machine.mode = HardwareMode::Cgb;
@@ -3969,6 +4353,7 @@ mod tests {
     }
 
     #[test]
+    // Verify two queued GDMA stalls are added to the next step's reported CPU cycles and trace.
     fn gdma_adds_cpu_stall_cycles_to_finished_step() {
         let mut machine = make_machine(&[0x00]);
         machine.mode = HardwareMode::Cgb;
@@ -3988,6 +4373,7 @@ mod tests {
     }
 
     #[test]
+    // Rewrite FF55 with bit 7 set during an armed transfer and check its original count and ignored-write trace.
     fn active_hblank_hdma_write_with_bit7_set_is_ignored() {
         let mut machine = make_machine(&[0x00]);
         machine.mode = HardwareMode::Cgb;
@@ -4011,6 +4397,7 @@ mod tests {
     }
 
     #[test]
+    // Cross HBlank with CPU halted and check the transfer remains armed with a defer reason.
     fn hblank_hdma_defers_when_cpu_is_halted() {
         let mut machine = make_machine(&[0x00]);
         machine.mode = HardwareMode::Cgb;
@@ -4039,6 +4426,8 @@ mod tests {
     }
 
     #[test]
+    // Reset DIV after raising the selected timer input and check the edge observation.
+    // The count assertion is nondecreasing; it does not require exactly one increment.
     fn div_reset_edge_can_increment_tima() {
         let mut machine = make_machine(&[0x00]);
         machine.timer.tac = 0x05;
@@ -4059,6 +4448,7 @@ mod tests {
     }
 
     #[test]
+    // Advance one standalone normal-rate byte interval and check start/completion and serial IRQ observations.
     fn serial_internal_clock_completes_and_requests_interrupt() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF01, 0xA5);
@@ -4092,6 +4482,8 @@ mod tests {
     }
 
     #[test]
+    // Exchange complementary bytes directly between armed peers and inspect both received values and IRQs;
+    // this exercises the byte API, not cable scheduling or physical transfer timing.
     fn serial_link_exchange_completes_between_internal_and_external_peers() {
         let mut left = make_machine(&[0x00]);
         let mut right = make_machine(&[0x00]);
@@ -4140,6 +4532,7 @@ mod tests {
     }
 
     #[test]
+    // Deliver an external byte and inspect outgoing data, register mirror and IRQ; reject an internal-clock transfer.
     fn external_serial_device_clocks_only_external_mode_and_records_irq() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF01, 0xA5);
@@ -4177,6 +4570,7 @@ mod tests {
     }
 
     #[test]
+    // Advance an attached sender for a standalone byte interval, then arm its peer and exchange directly.
     fn attached_serial_waits_for_peer_instead_of_completing_open_bus() {
         let mut left = make_machine(&[0x00]);
         let mut right = make_machine(&[0x00]);
@@ -4203,6 +4597,7 @@ mod tests {
     }
 
     #[test]
+    // Clear SC start after arming a byte and check both active state and readable start bit.
     fn clearing_serial_start_bit_cancels_pending_transfer() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF01, 0xA5);
@@ -4216,6 +4611,7 @@ mod tests {
     }
 
     #[test]
+    // Select directional keys, press the low mask bit and inspect input, edge and IRQ observations.
     fn joypad_press_requests_interrupt_when_selected() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF00, 0x20);
@@ -4241,6 +4637,7 @@ mod tests {
     }
 
     #[test]
+    // Select action keys, press mask bit 7 and check the joypad request plus edge observations.
     fn joypad_action_button_requests_interrupt_when_selected() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF00, 0x10);
@@ -4259,6 +4656,7 @@ mod tests {
     }
 
     #[test]
+    // Read a selected pressed key through the CPU bus and match P1/select/mask in the later step trace.
     fn reading_ff00_emits_joypad_read_trace() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF00, 0x20);
@@ -4279,6 +4677,7 @@ mod tests {
     }
 
     #[test]
+    // Execute with an enabled pending timer request and IME clear, checking the blocked-service observation.
     fn pending_interrupt_with_ime_clear_emits_blocked_trace() {
         let mut machine = make_machine(&[0x00]);
         machine.interrupt.ie = INT_TIMER;
@@ -4291,6 +4690,7 @@ mod tests {
     }
 
     #[test]
+    // Write an MBC6 control register and drain pending observations without advancing any clocks.
     fn special_mapper_control_write_emits_trace() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x147] = 0x20;
@@ -4312,6 +4712,7 @@ mod tests {
     }
 
     #[test]
+    // Mark an active interrupt handler directly, then check that its mapper write produces the runtime-state warning.
     fn irq_mapper_write_emits_sarakura_runtime_state_diagnostic() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x147] = 0x20;
@@ -4330,6 +4731,7 @@ mod tests {
     }
 
     #[test]
+    // Toggle master power and trigger channel 1, then inspect pending events without advancing audio time.
     fn apu_master_toggle_and_trigger_emit_trace() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF26, 0x00);
@@ -4353,6 +4755,7 @@ mod tests {
     }
 
     #[test]
+    // Advance one frame-sequencer interval and look for the step-1 event.
     fn apu_frame_sequencer_step_is_observable() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF26, 0x80);
@@ -4366,6 +4769,7 @@ mod tests {
     }
 
     #[test]
+    // Configure and run channel 1, checking mixer/output event presence rather than waveform values.
     fn apu_mixer_write_and_mixed_output_are_observable() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF26, 0x80);
@@ -4389,6 +4793,7 @@ mod tests {
     }
 
     #[test]
+    // Trigger channel 1 with a one-step length counter and check its expiry event.
     fn apu_length_expiry_is_observable() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF26, 0x80);
@@ -4405,6 +4810,7 @@ mod tests {
     }
 
     #[test]
+    // Configure channel 1 sweep and advance far enough to observe a sweep event.
     fn apu_sweep_step_is_observable() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF26, 0x80);
@@ -4423,6 +4829,7 @@ mod tests {
     }
 
     #[test]
+    // Generate channel PCM and confirm buffer availability plus a nonempty drain; sample amplitudes are not compared.
     fn apu_pcm_frames_reach_machine_audio_buffer() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF26, 0x80);
@@ -4445,6 +4852,7 @@ mod tests {
     }
 
     #[test]
+    // Request one additional buffered audio frame and check progress before the first nominal video frame.
     fn run_audio_slice_generates_pcm_before_full_frame() {
         let mut machine = make_machine(&[0x00]);
         machine.write8(0xFF26, 0x80);
@@ -4463,6 +4871,7 @@ mod tests {
     }
 
     #[test]
+    // Compare bounded slices with a whole-frame run on a NOP fixture using PC, CPU clocks and PPU timing.
     fn run_slice_can_complete_frame_progressively() {
         let mut sliced = make_machine(&[0x00]);
         let mut whole = sliced.clone();
@@ -4490,6 +4899,7 @@ mod tests {
     }
 
     #[test]
+    // Trigger channel 1 and check a nonzero low PCM12 nibble after a short interval.
     fn cgb_pcm_registers_expose_channel_digital_outputs() {
         let mut machine = make_cgb_machine(&[0x00]);
         machine.write8(0xFF26, 0x80);
@@ -4505,6 +4915,7 @@ mod tests {
     }
 
     #[test]
+    // Load a dual-mode header and verify automatic CGB selection and its pending observation.
     fn cgb_header_selects_cgb_mode_on_load() {
         let mut machine = Machine::new();
         machine.load_rom(make_cgb_test_rom(&[0x00], 0x80)).unwrap();
@@ -4520,6 +4931,7 @@ mod tests {
     }
 
     #[test]
+    // Force DMG for a dual-mode image and check the selected machine mode.
     fn load_rom_with_forced_dmg_keeps_dual_mode_rom_in_dmg_mode() {
         let mut machine = Machine::new();
         machine
@@ -4530,6 +4942,7 @@ mod tests {
     }
 
     #[test]
+    // Force CGB for a DMG image and check that the load is accepted in CGB mode.
     fn load_rom_with_forced_cgb_allows_dmg_rom_in_cgb_mode() {
         let mut machine = Machine::new();
         machine
@@ -4540,6 +4953,7 @@ mod tests {
     }
 
     #[test]
+    // Require an InvalidState error when forced DMG conflicts with a CGB-only header.
     fn load_rom_with_forced_dmg_rejects_cgb_only_rom() {
         let mut machine = Machine::new();
         let error = machine
@@ -4550,6 +4964,7 @@ mod tests {
     }
 
     #[test]
+    // Inspect two endpoint colors of the fixed compatibility palette installed for forced-CGB DMG software.
     fn load_rom_with_forced_cgb_initializes_dmg_compatibility_palettes() {
         let mut machine = Machine::new();
         machine
@@ -4562,6 +4977,8 @@ mod tests {
     }
 
     #[test]
+    // Compare one NOP frame in traced and fast modes using clocks, PC and PPU position.
+    // This fixture does not exercise interrupt wakeup, DMA, pixels or audio equivalence.
     fn run_frame_fast_matches_run_frame_for_basic_timing() {
         let mut slow = make_machine(&[0x00]);
         let mut fast = slow.clone();
@@ -4577,6 +4994,7 @@ mod tests {
     }
 
     #[test]
+    // Assert the configured DMG register and selected I/O reset values after loading a synthetic ROM.
     fn load_rom_applies_dmg_post_boot_registers_and_io() {
         let machine = make_machine(&[0x00]);
 
@@ -4599,6 +5017,7 @@ mod tests {
     }
 
     #[test]
+    // Dirty selected CPU/PPU fields, reload and check that initialization replaces them.
     fn load_rom_resets_cpu_and_ppu_state() {
         let mut machine = make_machine(&[0x00]);
         machine.cpu.a = 0x99;
@@ -4623,6 +5042,7 @@ mod tests {
     }
 
     #[test]
+    // Write distinct bytes through VBK-selected VRAM banks and inspect backing storage and the switch trace.
     fn vbk_switch_selects_second_vram_bank() {
         let mut machine = make_cgb_machine(&[0x00]);
         machine.write8(0x8000, 0x12);
@@ -4642,6 +5062,7 @@ mod tests {
     }
 
     #[test]
+    // Write distinct bytes in WRAM banks 1 and 2, switch back and check readback plus trace.
     fn svbk_switch_selects_switchable_wram_bank() {
         let mut machine = make_cgb_machine(&[0x00]);
         machine.write8(0xD000, 0x56);
@@ -4662,6 +5083,7 @@ mod tests {
     }
 
     #[test]
+    // Keep DFF5 and FFF5 distinct across writes and a WRAM bank switch.
     fn upper_wram_tail_does_not_mirror_into_hram() {
         let mut machine = make_cgb_machine(&[0x00]);
         machine.write8(0xFFF5, 0xAA);
@@ -4676,6 +5098,7 @@ mod tests {
     }
 
     #[test]
+    // Run a synthetic call/stack sequence that saves SP in HRAM and restores it after upper-WRAM stack activity.
     fn hram_scratch_survives_stack_usage_in_upper_wram() {
         let mut machine = make_cgb_machine(&[
             0x31, 0xF9, 0xDF, // LD SP,$DFF9
@@ -4716,6 +5139,7 @@ mod tests {
     }
 
     #[test]
+    // Write both bytes of one RGB555 color with auto-increment and verify color, index and first-write trace.
     fn cgb_bg_palette_auto_increment_advances_index() {
         let mut machine = make_cgb_machine(&[0x00]);
         machine.write8(0xFF68, 0x80);
@@ -4736,6 +5160,7 @@ mod tests {
     }
 
     #[test]
+    // Attempt a mode-3 palette write and check unchanged color data with an incremented index and blocked trace.
     fn cgb_palette_write_is_blocked_during_mode_three_but_index_still_advances() {
         let mut machine = make_cgb_machine(&[0x00]);
         machine.ppu.lcdc = 0x91;
@@ -4758,6 +5183,7 @@ mod tests {
     }
 
     #[test]
+    // Arm KEY1 and execute STOP, checking the speed toggle, consumed freeze and reported cycles/observations.
     fn key1_write_followed_by_stop_switches_double_speed() {
         let mut machine = make_cgb_machine(&[0x10, 0x00, 0x00]);
         machine.write8(0xFF4D, 0x01);
@@ -4797,6 +5223,7 @@ mod tests {
     }
 
     #[test]
+    // Charge 16 CPU cycles at double speed and check one timer increment against eight PPU cycles.
     fn double_speed_keeps_lcd_progress_slower_than_timer_progress() {
         let mut machine = make_cgb_machine(&[0x00]);
         machine.cgb_double_speed = true;
@@ -4812,6 +5239,7 @@ mod tests {
     }
 
     #[test]
+    // Start one GDMA block at double speed and inspect both stall observations for 64 CPU cycles.
     fn double_speed_gdma_stall_estimate_doubles_cpu_cycles() {
         let mut machine = make_cgb_machine(&[0x00]);
         machine.cgb_double_speed = true;
@@ -4839,6 +5267,7 @@ mod tests {
     }
 
     #[test]
+    // Verify mode-3 palette data reads as FF after a blocked write while its index still advances.
     fn blocked_palette_write_keeps_data_ff_visible() {
         let mut machine = make_cgb_machine(&[0x00]);
         machine.ppu.lcdc = 0x91;

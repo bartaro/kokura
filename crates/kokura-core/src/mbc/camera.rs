@@ -14,6 +14,8 @@ pub struct PocketCamera {
 }
 
 impl Default for PocketCamera {
+    // Select ROM one/RAM zero, disable RAM writes and camera selection,
+    // and allocate zeroed camera registers with no capture pending.
     fn default() -> Self {
         Self {
             rom_bank: 1,
@@ -28,14 +30,18 @@ impl Default for PocketCamera {
 }
 
 impl PocketCamera {
+    // Return the stored ROM selector; normal control writes restrict it
+    // to six bits and permit zero.
     pub fn current_rom_bank(&self) -> u16 {
         self.rom_bank as u16
     }
 
+    // Return the stored RAM selector even when the register window is selected.
     pub fn current_ram_bank(&self) -> u16 {
         self.ram_bank as u16
     }
 
+    // Read fixed lower ROM and wrapped selected upper ROM in 16 KiB banks.
     pub fn read_rom(&self, rom: &[u8], addr: u16) -> u8 {
         match addr {
             0x0000..=0x3FFF => rom.get(addr as usize).copied().unwrap_or(0xFF),
@@ -47,6 +53,9 @@ impl PocketCamera {
         }
     }
 
+    // When selected, expose mirrored camera registers and a live capture
+    // status bit. Otherwise active capture returns zero, while idle RAM reads
+    // use the selected bank independently of the RAM-write gate.
     pub fn read_ram(&self, ram: &[u8], addr: u16) -> u8 {
         if self.camera_selected {
             let index = (addr as usize) & 0x7F;
@@ -63,6 +72,9 @@ impl PocketCamera {
         }
     }
 
+    // Camera-register writes bypass the RAM-write gate. Register zero
+    // starts capture or clears active status; a restart reuses any nonzero
+    // remaining delay. Ordinary RAM writes require enable and idle capture.
     pub fn write_ram(&mut self, ram: &mut [u8], addr: u16, value: u8) {
         if self.camera_selected {
             let index = (addr as usize) & 0x7F;
@@ -87,6 +99,8 @@ impl PocketCamera {
         }
     }
 
+    // Latch the RAM-write gate, six-bit ROM bank, four-bit RAM bank and
+    // camera-register selection bit from cartridge control writes.
     pub fn write(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x1FFF => self.ram_write_enabled = (value & 0x0F) == 0x0A,
@@ -99,6 +113,9 @@ impl PocketCamera {
         }
     }
 
+    // Subtract capture cycles to zero and clear active/start status at
+    // completion. This models a wait interval only; it does not capture a
+    // host image or write generated image tiles into cartridge RAM.
     pub fn tick(&mut self, cycles: u32) {
         if !self.capture_active {
             return;
@@ -111,6 +128,8 @@ impl PocketCamera {
         }
     }
 
+    // Combine the register-one timing bit and big-endian exposure value
+    // into the modeled capture delay, then scale it by four CPU cycles.
     fn capture_duration_cycles(&self) -> u32 {
         let n_bit = if self.camera_registers.get(1).copied().unwrap_or(0) & 0x80 != 0 {
             0u32
@@ -128,6 +147,8 @@ mod tests {
     use super::*;
 
     #[test]
+    // Start a capture, check the zero RAM read during its delay and verify
+    // normal backing reads resume at completion. Image generation is not tested.
     fn capture_blocks_ram_until_duration_elapses() {
         let mut camera = PocketCamera::default();
         let mut ram = vec![0xFF; 0x2000];

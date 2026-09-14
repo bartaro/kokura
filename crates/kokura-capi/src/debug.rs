@@ -14,6 +14,9 @@ use crate::{
     strings::into_c_string_ptr,
 };
 
+// All C entry points require a live matching handle and serialized
+// access, including getters. Callback invocation retains the exclusive
+// session borrow: calling back into this handle would violate that contract.
 struct DebugSessionHandleImpl {
     session: DebugSession,
     symbol_table: SymbolTable,
@@ -23,6 +26,8 @@ struct DebugSessionHandleImpl {
     last_error: Option<String>,
 }
 
+// Borrowed callback arguments are valid only until the callback returns;
+// user_data belongs to the caller and is never released by this library.
 type KokuraDebugCallbackFn =
     unsafe extern "C" fn(kind: *const c_char, payload_json: *const c_char, user_data: *mut c_void);
 
@@ -67,11 +72,14 @@ struct DebugCallbackStopPayload<'a> {
     stop_reason: &'a kokura_debug::StopReason,
 }
 
+// Enable stop notifications when serde omits that configuration field.
 fn default_emit_stop_callback() -> bool {
     true
 }
 
 impl Default for DebugCallbackConfig {
+    // Disable periodic frame and selected-event callbacks while enabling
+    // stop callbacks; an actual callback function must still be registered.
     fn default() -> Self {
         Self {
             frame_interval: None,
@@ -82,6 +90,8 @@ impl Default for DebugCallbackConfig {
 }
 
 impl DebugCallbackConfig {
+    // Reject a zero frame interval, normalize event aliases and sort/dedup
+    // the resulting labels. Unknown labels are retained rather than rejected.
     fn validate(mut self) -> Result<Self, String> {
         if self.frame_interval == Some(0) {
             return Err("callback frame_interval must be >= 1 when provided".to_string());
@@ -96,11 +106,15 @@ impl DebugCallbackConfig {
         Ok(self)
     }
 
+    // Match an already normalized label exactly against the configured list;
+    // an empty list selects no events and is not a wildcard.
     fn wants_event_type(&self, event_type: &str) -> bool {
         self.event_types.iter().any(|value| value == event_type)
     }
 }
 
+// Borrow the opaque live debug handle exclusively, treating null as absent.
+// Caller-provided provenance, lifetime and synchronization make this cast valid.
 fn handle_from_ptr<'a>(
     handle: *mut KokuraDebugSessionHandle,
 ) -> Option<&'a mut DebugSessionHandleImpl> {
@@ -111,6 +125,7 @@ fn handle_from_ptr<'a>(
     }
 }
 
+// Store an owned error message and return the caller-selected failure value.
 fn set_last_error<T>(
     handle: &mut DebugSessionHandleImpl,
     message: impl Into<String>,
@@ -120,10 +135,13 @@ fn set_last_error<T>(
     fallback
 }
 
+// Discard the previous diagnostic message before a new fallible operation.
 fn clear_last_error(handle: &mut DebugSessionHandleImpl) {
     handle.last_error = None;
 }
 
+// Reject null or invalid UTF-8 and borrow the C string contents. The
+// caller must supply readable NUL-terminated storage valid for the whole borrow.
 fn cstr_to_str<'a>(ptr: *const c_char) -> Result<&'a str, String> {
     if ptr.is_null() {
         return Err("received null C string pointer".to_string());
@@ -133,6 +151,8 @@ fn cstr_to_str<'a>(ptr: *const c_char) -> Result<&'a str, String> {
         .map_err(|err| format!("received invalid UTF-8 string: {err}"))
 }
 
+// Install a cloned combined table into the session or clear session
+// metadata when every local table collection is empty.
 fn rebuild_symbol_table(handle: &mut DebugSessionHandleImpl) {
     if handle.symbol_table.is_empty() {
         handle.session.clear_symbol_table();
@@ -141,6 +161,8 @@ fn rebuild_symbol_table(handle: &mut DebugSessionHandleImpl) {
     }
 }
 
+// Copy CPU/register pairs, clocks, bank labels and mode flags into
+// the shared C-layout value structure.
 fn cpu_snapshot(machine: &Machine) -> KokuraCpuSnapshot {
     KokuraCpuSnapshot {
         pc: machine.cpu.pc,
@@ -163,6 +185,8 @@ fn cpu_snapshot(machine: &Machine) -> KokuraCpuSnapshot {
 }
 
 #[no_mangle]
+// Allocate a new machine/debug session with empty metadata, no callback
+// and no stored error; release it once with the matching session destructor.
 pub extern "C" fn kokura_debug_session_create() -> *mut KokuraDebugSessionHandle {
     let handle = Box::new(DebugSessionHandleImpl {
         session: DebugSession::new(Machine::new()),
@@ -176,6 +200,8 @@ pub extern "C" fn kokura_debug_session_create() -> *mut KokuraDebugSessionHandle
 }
 
 #[no_mangle]
+// Destroy a live session allocation, accepting null. The caller must
+// ensure it is not in use, including by a callback, and destroy it only once.
 pub unsafe extern "C" fn kokura_debug_session_destroy(handle: *mut KokuraDebugSessionHandle) {
     if !handle.is_null() {
         let _ = Box::from_raw(handle as *mut DebugSessionHandleImpl);
@@ -183,6 +209,9 @@ pub unsafe extern "C" fn kokura_debug_session_destroy(handle: *mut KokuraDebugSe
 }
 
 #[no_mangle]
+// Copy readable ROM bytes into a new machine/session. Preserve local
+// symbol metadata and callback registration/configuration, but replace prior
+// session execution/replay/stop state only after ROM loading succeeds.
 pub unsafe extern "C" fn kokura_debug_session_load_rom(
     handle: *mut KokuraDebugSessionHandle,
     rom_ptr: *const u8,
@@ -218,6 +247,9 @@ pub unsafe extern "C" fn kokura_debug_session_load_rom(
 }
 
 #[no_mangle]
+// Read a NUL-terminated UTF-8 map string, replace symbol spans and
+// reinstall combined metadata. Invalid text encoding sets last_error;
+// malformed individual map rows follow the permissive parser behavior.
 pub unsafe extern "C" fn kokura_debug_session_load_symbol_map_text(
     handle: *mut KokuraDebugSessionHandle,
     map_text: *const c_char,
@@ -236,6 +268,8 @@ pub unsafe extern "C" fn kokura_debug_session_load_symbol_map_text(
 }
 
 #[no_mangle]
+// Replace source positions from a readable UTF-8 C string and rebuild
+// session metadata, retaining the other local table collections.
 pub unsafe extern "C" fn kokura_debug_session_load_source_map_text(
     handle: *mut KokuraDebugSessionHandle,
     source_map_text: *const c_char,
@@ -254,6 +288,8 @@ pub unsafe extern "C" fn kokura_debug_session_load_source_map_text(
 }
 
 #[no_mangle]
+// Decode and replace all local symbol metadata, then install it into
+// the session; decoding errors leave the old table and set last_error.
 pub unsafe extern "C" fn kokura_debug_session_load_symbol_table_json(
     handle: *mut KokuraDebugSessionHandle,
     symbol_table_json: *const c_char,
@@ -277,6 +313,7 @@ pub unsafe extern "C" fn kokura_debug_session_load_symbol_table_json(
 }
 
 #[no_mangle]
+// Clear both the retained table and session symbol metadata.
 pub unsafe extern "C" fn kokura_debug_session_clear_symbol_table(
     handle: *mut KokuraDebugSessionHandle,
 ) -> bool {
@@ -290,6 +327,8 @@ pub unsafe extern "C" fn kokura_debug_session_clear_symbol_table(
 }
 
 #[no_mangle]
+// Decode UTF-8 stop-condition JSON and pass it to session validation.
+// Store parse/validation failures in last_error and return false.
 pub unsafe extern "C" fn kokura_debug_session_set_stop_conditions_json(
     handle: *mut KokuraDebugSessionHandle,
     stop_conditions_json: *const c_char,
@@ -323,6 +362,7 @@ pub unsafe extern "C" fn kokura_debug_session_set_stop_conditions_json(
 }
 
 #[no_mangle]
+// Clear the session stop-condition set through its dedicated method.
 pub unsafe extern "C" fn kokura_debug_session_clear_stop_conditions(
     handle: *mut KokuraDebugSessionHandle,
 ) -> bool {
@@ -335,6 +375,8 @@ pub unsafe extern "C" fn kokura_debug_session_clear_stop_conditions(
 }
 
 #[no_mangle]
+// Decode replay configuration and delegate validation/application to
+// the session, returning false with last_error on failure.
 pub unsafe extern "C" fn kokura_debug_session_set_replay_control_json(
     handle: *mut KokuraDebugSessionHandle,
     replay_control_json: *const c_char,
@@ -368,6 +410,8 @@ pub unsafe extern "C" fn kokura_debug_session_set_replay_control_json(
 }
 
 #[no_mangle]
+// Apply default disabled replay settings through normal session
+// configuration handling, reporting any failure through last_error.
 pub unsafe extern "C" fn kokura_debug_session_clear_replay_control(
     handle: *mut KokuraDebugSessionHandle,
 ) -> bool {
@@ -389,6 +433,8 @@ pub unsafe extern "C" fn kokura_debug_session_clear_replay_control(
 }
 
 #[no_mangle]
+// Clear the previous error and apply input through the machine-level
+// path rather than writing the Joypad fields directly.
 pub unsafe extern "C" fn kokura_debug_session_set_joypad_mask(
     handle: *mut KokuraDebugSessionHandle,
     mask: u8,
@@ -402,6 +448,10 @@ pub unsafe extern "C" fn kokura_debug_session_set_joypad_mask(
 }
 
 #[no_mangle]
+// Run with optional synchronous event/frame/stop callbacks and fill
+// an optional writable result. Execution success can coexist with a callback
+// serialization error in last_error. Frame counts are net, saturating deltas
+// and may be reduced by rewind; a debugger stop need not return false.
 pub unsafe extern "C" fn kokura_debug_session_run_frames(
     handle: *mut KokuraDebugSessionHandle,
     frames: u64,
@@ -411,6 +461,8 @@ pub unsafe extern "C" fn kokura_debug_session_run_frames(
         return false;
     };
     clear_last_error(handle);
+    // Use the current frame count as the baseline for the net run result;
+    // callbacks may report intermediate progress before a later rewind.
     let start_frames = handle.session.machine.clocks.frames;
     let start_event_cursor = handle
         .callback_event_cursor
@@ -455,6 +507,8 @@ pub unsafe extern "C" fn kokura_debug_session_run_frames(
         handle.session.run_frames(frames)
     };
     handle.callback_event_cursor = callback_event_cursor;
+    // Retain callback serialization errors without turning a successful
+    // session run into a false return; execution errors can replace this message.
     if let Some(err) = callback_error.take() {
         handle.last_error = Some(err);
     }
@@ -508,6 +562,8 @@ pub unsafe extern "C" fn kokura_debug_session_run_frames(
 }
 
 #[no_mangle]
+// Request rewind through stored replay checkpoints and report a missing
+// matching checkpoint via false and last_error.
 pub unsafe extern "C" fn kokura_debug_session_rewind_frames(
     handle: *mut KokuraDebugSessionHandle,
     frames_back: u64,
@@ -528,6 +584,8 @@ pub unsafe extern "C" fn kokura_debug_session_rewind_frames(
 }
 
 #[no_mangle]
+// Serialize the current report into an owned UTF-8 C string; null
+// reports failure. Release a non-null result with kokura_string_free.
 pub unsafe extern "C" fn kokura_debug_session_report_json(
     handle: *mut KokuraDebugSessionHandle,
 ) -> *mut c_char {
@@ -545,6 +603,8 @@ pub unsafe extern "C" fn kokura_debug_session_report_json(
 }
 
 #[no_mangle]
+// Serialize machine state as owned JSON text, not a KQS file envelope
+// or a complete debugger-session snapshot. Free the result with kokura_string_free.
 pub unsafe extern "C" fn kokura_debug_session_save_state_json(
     handle: *mut KokuraDebugSessionHandle,
 ) -> *mut c_char {
@@ -564,6 +624,9 @@ pub unsafe extern "C" fn kokura_debug_session_save_state_json(
 }
 
 #[no_mangle]
+// Decode a MachineState JSON payload, delegate application to the
+// session and advance the callback cursor to its resulting log end. This
+// wrapper does not validate state invariants or compare the live ROM.
 pub unsafe extern "C" fn kokura_debug_session_load_state_json(
     handle: *mut KokuraDebugSessionHandle,
     state_json: *const c_char,
@@ -592,6 +655,8 @@ pub unsafe extern "C" fn kokura_debug_session_load_state_json(
 }
 
 #[no_mangle]
+// Serialize the optional stop reason into an owned C string. No stop
+// is represented by JSON null text, distinct from a null pointer on failure.
 pub unsafe extern "C" fn kokura_debug_session_stop_reason_json(
     handle: *mut KokuraDebugSessionHandle,
 ) -> *mut c_char {
@@ -609,6 +674,8 @@ pub unsafe extern "C" fn kokura_debug_session_stop_reason_json(
 }
 
 #[no_mangle]
+// Copy the last error into an owned C string without clearing it.
+// Null means no stored error or a null handle; free copied text with kokura_string_free.
 pub unsafe extern "C" fn kokura_debug_session_last_error(
     handle: *mut KokuraDebugSessionHandle,
 ) -> *mut c_char {
@@ -622,6 +689,7 @@ pub unsafe extern "C" fn kokura_debug_session_last_error(
 }
 
 #[no_mangle]
+// Clear the stored diagnostic message, returning false only for null.
 pub unsafe extern "C" fn kokura_debug_session_clear_last_error(
     handle: *mut KokuraDebugSessionHandle,
 ) -> bool {
@@ -633,6 +701,8 @@ pub unsafe extern "C" fn kokura_debug_session_clear_last_error(
 }
 
 #[no_mangle]
+// Borrow byte framebuffer storage; null handles return null. Do not
+// free or retain the pointer across session/machine mutation or destruction.
 pub unsafe extern "C" fn kokura_debug_session_framebuffer_ptr(
     handle: *mut KokuraDebugSessionHandle,
 ) -> *const u8 {
@@ -643,6 +713,7 @@ pub unsafe extern "C" fn kokura_debug_session_framebuffer_ptr(
 }
 
 #[no_mangle]
+// Return byte-framebuffer element count, or zero for null; do not clear last_error.
 pub unsafe extern "C" fn kokura_debug_session_framebuffer_len(
     handle: *mut KokuraDebugSessionHandle,
 ) -> usize {
@@ -652,6 +723,8 @@ pub unsafe extern "C" fn kokura_debug_session_framebuffer_len(
 }
 
 #[no_mangle]
+// Borrow the RGB555 word framebuffer, or return null for null. Copy
+// it before any session mutation; ownership remains with the machine.
 pub unsafe extern "C" fn kokura_debug_session_framebuffer_rgb555_ptr(
     handle: *mut KokuraDebugSessionHandle,
 ) -> *const u16 {
@@ -662,6 +735,7 @@ pub unsafe extern "C" fn kokura_debug_session_framebuffer_rgb555_ptr(
 }
 
 #[no_mangle]
+// Return the RGB555 u16 element count, not byte size; null returns zero.
 pub unsafe extern "C" fn kokura_debug_session_framebuffer_rgb555_len(
     handle: *mut KokuraDebugSessionHandle,
 ) -> usize {
@@ -671,6 +745,7 @@ pub unsafe extern "C" fn kokura_debug_session_framebuffer_rgb555_len(
 }
 
 #[no_mangle]
+// Report compatibility mode, returning false for null without clearing last_error.
 pub unsafe extern "C" fn kokura_debug_session_is_cgb_compat_mode(
     handle: *mut KokuraDebugSessionHandle,
 ) -> bool {
@@ -680,6 +755,8 @@ pub unsafe extern "C" fn kokura_debug_session_is_cgb_compat_mode(
 }
 
 #[no_mangle]
+// Clear last_error and copy CPU state into one writable output object;
+// null output returns false and records a message on a valid handle.
 pub unsafe extern "C" fn kokura_debug_session_cpu_snapshot(
     handle: *mut KokuraDebugSessionHandle,
     out_snapshot: *mut KokuraCpuSnapshot,
@@ -700,6 +777,8 @@ pub unsafe extern "C" fn kokura_debug_session_cpu_snapshot(
 }
 
 #[no_mangle]
+// Clear last_error and inspect one byte without ordinary bus-read side
+// effects. Null returns FF, which is also a valid memory value.
 pub unsafe extern "C" fn kokura_debug_session_peek8(
     handle: *mut KokuraDebugSessionHandle,
     addr: u16,
@@ -712,6 +791,8 @@ pub unsafe extern "C" fn kokura_debug_session_peek8(
 }
 
 #[no_mangle]
+// Clear last_error and perform a bus read with modeled side effects;
+// null returns FF. Use peek8 when inspecting rather than accessing a device.
 pub unsafe extern "C" fn kokura_debug_session_read8(
     handle: *mut KokuraDebugSessionHandle,
     addr: u16,
@@ -724,6 +805,8 @@ pub unsafe extern "C" fn kokura_debug_session_read8(
 }
 
 #[no_mangle]
+// Clear last_error and issue a machine bus write. A true result does
+// not guarantee that the device accepted the value through its access gates.
 pub unsafe extern "C" fn kokura_debug_session_write8(
     handle: *mut KokuraDebugSessionHandle,
     addr: u16,
@@ -738,6 +821,7 @@ pub unsafe extern "C" fn kokura_debug_session_write8(
 }
 
 #[no_mangle]
+// Return queued stereo frames or zero for null, preserving last_error.
 pub unsafe extern "C" fn kokura_debug_session_audio_frames_available(
     handle: *mut KokuraDebugSessionHandle,
 ) -> usize {
@@ -747,6 +831,7 @@ pub unsafe extern "C" fn kokura_debug_session_audio_frames_available(
 }
 
 #[no_mangle]
+// Return the output sample rate or zero for null, preserving last_error.
 pub unsafe extern "C" fn kokura_debug_session_audio_sample_rate(
     handle: *mut KokuraDebugSessionHandle,
 ) -> u32 {
@@ -756,6 +841,7 @@ pub unsafe extern "C" fn kokura_debug_session_audio_sample_rate(
 }
 
 #[no_mangle]
+// Return the accumulated dropped-frame count or zero for null.
 pub unsafe extern "C" fn kokura_debug_session_audio_frames_dropped(
     handle: *mut KokuraDebugSessionHandle,
 ) -> u64 {
@@ -765,6 +851,7 @@ pub unsafe extern "C" fn kokura_debug_session_audio_frames_dropped(
 }
 
 #[no_mangle]
+// Return audio capacity in stereo frames, or zero for null.
 pub unsafe extern "C" fn kokura_debug_session_audio_buffer_capacity_frames(
     handle: *mut KokuraDebugSessionHandle,
 ) -> usize {
@@ -774,6 +861,8 @@ pub unsafe extern "C" fn kokura_debug_session_audio_buffer_capacity_frames(
 }
 
 #[no_mangle]
+// Clear last_error and request a queue capacity; record a rejected
+// capacity as false plus an error message.
 pub unsafe extern "C" fn kokura_debug_session_set_audio_buffer_capacity_frames(
     handle: *mut KokuraDebugSessionHandle,
     capacity_frames: usize,
@@ -793,6 +882,9 @@ pub unsafe extern "C" fn kokura_debug_session_set_audio_buffer_capacity_frames(
 }
 
 #[no_mangle]
+// Drain up to max_frames stereo frames into nonoverlapping caller
+// storage for 2 * max_frames i16 elements. Return frames copied, or zero
+// for null/zero/empty input conditions; this call preserves last_error.
 pub unsafe extern "C" fn kokura_debug_session_audio_copy_interleaved_i16(
     handle: *mut KokuraDebugSessionHandle,
     dst: *mut i16,
@@ -816,6 +908,9 @@ pub unsafe extern "C" fn kokura_debug_session_audio_copy_interleaved_i16(
 }
 
 #[no_mangle]
+// Register a non-null C callback and borrowed user_data with the current
+// configuration, skipping old events. Keep both callable/data valid until
+// unregistration; callbacks must not reenter or destroy this borrowed session.
 pub unsafe extern "C" fn kokura_debug_session_set_callback(
     handle: *mut KokuraDebugSessionHandle,
     callback: Option<KokuraDebugCallbackFn>,
@@ -842,6 +937,7 @@ pub unsafe extern "C" fn kokura_debug_session_set_callback(
 }
 
 #[no_mangle]
+// Unregister the callback without freeing caller-owned user_data.
 pub unsafe extern "C" fn kokura_debug_session_clear_callback(
     handle: *mut KokuraDebugSessionHandle,
 ) -> bool {
@@ -854,6 +950,8 @@ pub unsafe extern "C" fn kokura_debug_session_clear_callback(
 }
 
 #[no_mangle]
+// Validate/normalize callback settings and apply them to both saved
+// configuration and any active registration; preserve old settings on failure.
 pub unsafe extern "C" fn kokura_debug_session_set_callback_config_json(
     handle: *mut KokuraDebugSessionHandle,
     callback_config_json: *const c_char,
@@ -888,6 +986,8 @@ pub unsafe extern "C" fn kokura_debug_session_set_callback_config_json(
 }
 
 #[no_mangle]
+// Restore default callback settings for future and active registrations
+// without unregistering the callback itself.
 pub unsafe extern "C" fn kokura_debug_session_clear_callback_config(
     handle: *mut KokuraDebugSessionHandle,
 ) -> bool {
@@ -902,6 +1002,9 @@ pub unsafe extern "C" fn kokura_debug_session_clear_callback_config(
     true
 }
 
+// Visit unconsumed log events and synchronously emit selected labels,
+// then advance the cursor. A serialization failure returns before cursor
+// advancement, so a later attempt can revisit earlier events in that slice.
 fn emit_new_event_callbacks(
     callback: &DebugCallbackRegistration,
     config: &DebugCallbackConfig,
@@ -923,6 +1026,9 @@ fn emit_new_event_callbacks(
     Ok(())
 }
 
+// Create temporary NUL-terminated kind/JSON strings and call foreign
+// code synchronously. Their pointers are borrowed only during this call;
+// the callback must copy retained text, never free it, and must not unwind.
 fn invoke_debug_callback<T: Serialize>(
     callback: &DebugCallbackRegistration,
     kind: &str,
@@ -940,6 +1046,8 @@ fn invoke_debug_callback<T: Serialize>(
     Ok(())
 }
 
+// Map each typed event to its callback category, grouping selected
+// start/end events and distinguishing HBlank from general DMA blocks.
 fn normalize_event_type_from_debug_event(event: &DebugEvent) -> String {
     match event {
         DebugEvent::ScanlineAdvance { .. } => "scanline".to_string(),
@@ -1028,6 +1136,8 @@ fn normalize_event_type_from_debug_event(event: &DebugEvent) -> String {
     }
 }
 
+// Trim/lowercase configured labels and map recognized aliases to
+// callback categories. Unknown labels remain normalized literal strings.
 fn normalize_event_type_label(value: &str) -> String {
     let normalized = value.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -1128,6 +1238,7 @@ mod tests {
     };
 
     #[test]
+    // Check alias normalization and deduplication with a frame interval of two.
     fn callback_config_normalizes_event_types() {
         let config = DebugCallbackConfig {
             frame_interval: Some(2),
@@ -1147,6 +1258,7 @@ mod tests {
     }
 
     #[test]
+    // Check three representative event aliases against their expected labels.
     fn callback_event_aliases_match_cli_labels() {
         assert_eq!(normalize_event_type_label("PpuModeChange"), "ppu_mode");
         assert_eq!(normalize_event_type_label("dma"), "oam_dma");
@@ -1154,6 +1266,8 @@ mod tests {
     }
 
     #[test]
+    // Create a C handle, set/release START and inspect the internal mask,
+    // then destroy it. This test does not execute a ROM or verify an IRQ edge.
     fn debug_session_set_joypad_mask_updates_machine() {
         let handle = kokura_debug_session_create();
         assert!(!handle.is_null());

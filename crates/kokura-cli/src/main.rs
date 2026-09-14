@@ -1,7 +1,8 @@
-//! `kokuradbg` コマンドのエントリポイント。
+//! Command-line entry point for KOKURA.
 //!
-//! 引数解析は `args`、JSONジョブの読み込みは `json_io`、ROM実行と成果物生成は
-//! `run` に分け、同じ実行機能をCLIの単発実行とジョブ形式の両方から呼び出します。
+//! Delegate argument parsing to args, JSON job loading to json_io, and ROM
+//! execution/artifact generation to run. Direct commands and job files share
+//! the same execution facilities.
 
 mod args;
 mod json_io;
@@ -11,6 +12,7 @@ use anyhow::Result;
 use args::Args;
 use clap::Parser;
 
+// Let clap handle command-line syntax and help, then propagate execution errors to the process entry point.
 fn main() -> Result<()> {
     let args = Args::parse();
     run::run(args)

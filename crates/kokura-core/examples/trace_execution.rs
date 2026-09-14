@@ -2,9 +2,9 @@
 //! Watch addresses are hexadecimal; frame and step counts are decimal.
 //! Run with --help for positional arguments. Output is English.
 use std::{env, error::Error, fs, path::PathBuf};
-use kokura_core::{state::MachineState, Machine};
+use kokura_core::Machine;
 
-const USAGE: &str = "usage: trace_from_state <rom_path> <state_path> [steps] [watch_hex,...]";
+const USAGE: &str = "usage: trace_execution <rom_path> [start_frame] [steps] [watch_hex,...]";
 
 // Parse the requested trace range, load the supplied ROM, and report bounded steps.
 fn main() -> Result<(), Box<dyn Error>> {
@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     let rom_path = PathBuf::from(first);
-    let state_path = args.next().map(PathBuf::from).ok_or(USAGE)?;
+    let start_frame = args.next().map(|value| value.parse::<u32>()).transpose()?.unwrap_or(0);
     let steps = args.next().map(|value| value.parse::<u32>()).transpose()?.unwrap_or(32);
     let watches = parse_watches(&args.next().unwrap_or_default())?;
     if args.next().is_some() {
@@ -23,10 +23,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let mut machine = Machine::new();
     machine.load_rom(fs::read(rom_path)?)?;
-    let state = MachineState::load_boxed_from_path(state_path)?;
-    // Reject a different ROM before applying a state that contains its own cartridge.
-    state.validate_header_against_machine(&machine)?;
-    machine.load_state(&state);
+    // Skip a caller-selected number of complete frames before instruction tracing.
+    for _ in 0..start_frame {
+        machine.run_frame()?;
+    }
     trace_steps(&mut machine, steps, &watches)
 }
 

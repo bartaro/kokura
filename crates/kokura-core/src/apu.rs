@@ -51,6 +51,7 @@ struct ChannelState {
 }
 
 impl Default for ChannelState {
+    // Start a silent channel with cleared timers and a nonzero 15-bit noise shift-register seed.
     fn default() -> Self {
         Self {
             enabled: false,
@@ -95,6 +96,8 @@ pub struct Apu {
     pcm_hpf_left: f64,
     pcm_hpf_right: f64,
     #[serde(skip, default)]
+    // Serde skips low-pass history while Clone preserves it. Deserialized states restart
+    // this smoothing history at zero even though high-pass state is retained.
     pcm_lpf_left: f64,
     #[serde(skip, default)]
     pcm_lpf_right: f64,
@@ -108,6 +111,7 @@ pub struct Apu {
 }
 
 impl Default for Apu {
+    // Create a powered-off APU with an empty interleaved stereo queue and cleared filter/history state.
     fn default() -> Self {
         Self {
             regs: [0; 0x17],
@@ -138,11 +142,15 @@ impl Default for Apu {
     }
 }
 
+// Supply the default logical stereo-frame capacity for both construction and older serialized states.
 const fn default_pcm_buffer_capacity_frames() -> usize {
     DEFAULT_APU_PCM_BUFFER_CAPACITY_FRAMES
 }
 
 impl Apu {
+    // Install this model's post-boot registers and clear channels, filters and queued PCM.
+    // The mode argument selects the initial channel mask; set_cgb_mode separately selects mode behavior.
+    // Configured queue capacity and lifetime generated/dropped counters are retained.
     pub fn initialize_post_boot_state(&mut self, mode: HardwareMode) {
         self.regs = [
             0x80, 0xBF, 0xF3, 0xFF, 0xBF, 0x3F, 0x00, 0xFF, 0xBF, 0x7F, 0xFF, 0x9F, 0xFF, 0xBF,
@@ -177,6 +185,8 @@ impl Apu {
         self.last_mixed_mask = 0;
     }
 
+    // Return stored registers, synthesized NR52 status or digital PCM taps. This model blocks
+    // active DMG wave-RAM reads and aliases active CGB accesses to the current wave byte.
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
             0xFF10..=0xFF25 => self.regs[(addr - 0xFF10) as usize],
@@ -195,6 +205,8 @@ impl Apu {
         }
     }
 
+    // Update mapped registers and emit control observations. Ordinary register side effects
+    // are applied even while master power is off; channel triggers additionally require master power.
     pub fn write(&mut self, addr: u16, value: u8) -> Vec<ApuTraceEvent> {
         let mut trace = Vec::new();
         match addr {
@@ -286,6 +298,8 @@ impl Apu {
         trace
     }
 
+    // Advance enabled audio in bounded APU-cycle chunks, queue PCM and return trace events.
+    // Per-call generated/drop counts saturate at u16 while lifetime counters use u64.
     pub fn tick(&mut self, cycles: u32) -> ApuTickResult {
         let mut out = ApuTickResult::default();
         if !self.master_enabled {
@@ -321,6 +335,8 @@ impl Apu {
         out
     }
 
+    // Advance through the same channel, sequencer and PCM path while discarding trace output.
+    // Sequencer helpers may still append temporary events; this is not a separate sound model.
     pub fn tick_fast(&mut self, cycles: u32) {
         if !self.master_enabled {
             return;
@@ -344,39 +360,49 @@ impl Apu {
         self.emit_mixed_output_if_changed(&mut dummy_trace);
     }
 
+    // Return the current eight-step length/sweep/envelope sequencer position.
     pub fn frame_sequencer_step(&self) -> u8 {
         self.frame_seq_step
     }
 
+    // Expose the fixed 65536 Hz stereo-frame output rate.
     pub fn output_sample_rate(&self) -> u32 {
         APU_OUTPUT_SAMPLE_RATE
     }
 
+    // Select wave-RAM access and filter coefficients without resetting channel or filter state.
     pub fn set_cgb_mode(&mut self, cgb_mode: bool) {
         self.cgb_mode = cgb_mode;
     }
 
+    // Convert the interleaved sample count to complete left/right frame pairs.
     pub fn buffered_frames(&self) -> usize {
         self.pcm_buffer.len() / 2
     }
 
+    // Return the accumulated generated-frame count, independent of whether frames were drained.
     pub fn generated_frames(&self) -> u64 {
         self.pcm_frames_generated
     }
 
+    // Return counted overflow losses; frames discarded by an explicit resize are not added here.
     pub fn dropped_frames(&self) -> u64 {
         self.pcm_frames_dropped
     }
 
+    // Expose the logical queue limit in stereo frames rather than VecDeque allocation size.
     pub fn buffer_capacity_frames(&self) -> usize {
         self.pcm_buffer_capacity_frames
     }
 
+    // Reject zero capacity and discard oldest samples when shrinking. Resize discards do
+    // not increment the overflow counter; allocation reservation is a separate implementation detail.
     pub fn set_buffer_capacity_frames(&mut self, capacity_frames: usize) -> Result<(), String> {
         if capacity_frames == 0 {
             return Err("audio buffer capacity must be non-zero".to_string());
         }
         self.pcm_buffer_capacity_frames = capacity_frames;
+        // Keep the logical limit in frame units and convert to interleaved sample storage only here.
         let target_samples = capacity_frames.saturating_mul(2);
         while self.pcm_buffer.len() > target_samples {
             let _ = self.pcm_buffer.pop_front();
@@ -388,6 +414,7 @@ impl Apu {
         Ok(())
     }
 
+    // Remove at most max_frames complete stereo pairs, returning left/right interleaved samples.
     pub fn drain_interleaved_i16(&mut self, max_frames: usize) -> Vec<i16> {
         let frames = max_frames.min(self.buffered_frames());
         let mut out = Vec::with_capacity(frames * 2);
@@ -399,14 +426,18 @@ impl Apu {
         out
     }
 
+    // Pack current digital channel 1 and 2 outputs into the low and high nibbles.
     pub fn pcm12(&self) -> u8 {
         self.channel_digital_output(1) | (self.channel_digital_output(2) << 4)
     }
 
+    // Pack current digital channel 3 and 4 outputs into the low and high nibbles.
     pub fn pcm34(&self) -> u8 {
         self.channel_digital_output(3) | (self.channel_digital_output(4) << 4)
     }
 
+    // Stop before the next sample, sequencer or mix-trace boundary and cap chunks at
+    // 16 APU cycles. Restored timing counters must remain within their valid periods.
     fn next_timed_chunk(&self, remaining: u32) -> u16 {
         let mut chunk = remaining.min(u32::from(u16::MAX)) as u16;
         chunk = chunk.min((APU_PCM_SAMPLE_CYCLES - self.pcm_sample_cycles).max(1));
@@ -416,6 +447,8 @@ impl Apu {
         chunk.max(1)
     }
 
+    // Advance channel phases, weight the resulting mix by chunk duration and service
+    // PCM, frame-sequencer and trace deadlines in that order.
     fn process_timed_chunk(
         &mut self,
         chunk: u16,
@@ -428,6 +461,8 @@ impl Apu {
         self.frame_seq_cycles = self.frame_seq_cycles.saturating_add(chunk);
         self.mix_trace_cycles = self.mix_trace_cycles.saturating_add(chunk);
         self.pcm_sample_cycles = self.pcm_sample_cycles.saturating_add(chunk);
+        // Use the mix after advancing the chunk; this is bounded-step integration, not an
+        // exact integral over every oscillator transition inside the chunk.
         let (mixed_left, mixed_right, _) = self.mix_output();
         self.pcm_accum_left = self
             .pcm_accum_left
@@ -443,6 +478,7 @@ impl Apu {
         }
         if self.frame_seq_cycles >= APU_FRAME_SEQUENCER_CYCLES {
             self.frame_seq_cycles -= APU_FRAME_SEQUENCER_CYCLES;
+            // Advance before dispatching: even steps clock length, steps 2/6 sweep and step 7 envelope.
             self.frame_seq_step = (self.frame_seq_step + 1) & 0x07;
             if emit_trace {
                 trace.push(ApuTraceEvent::FrameSequencerStep {
@@ -469,6 +505,8 @@ impl Apu {
         }
     }
 
+    // Decode channel length, envelope, DAC and frequency writes. Clearing sweep negate
+    // after its use disables channel 1 in this model.
     fn apply_register_side_effects(
         &mut self,
         addr: u16,
@@ -512,6 +550,8 @@ impl Apu {
         }
     }
 
+    // Apply initial volume/direction and reload the envelope timer immediately, then
+    // derive the DAC gate from the upper five bits of the envelope register.
     fn update_envelope_from_reg(&mut self, channel: u8, value: u8, trace: &mut Vec<ApuTraceEvent>) {
         let idx = (channel - 1) as usize;
         let st = &mut self.channels[idx];
@@ -537,6 +577,8 @@ impl Apu {
         );
     }
 
+    // Track DAC transitions, report possible output discontinuities and disable the channel
+    // when its DAC is off. PopRisk is an observation hint, not a measured audible click.
     fn update_dac_state(
         &mut self,
         channel: u8,
@@ -570,6 +612,8 @@ impl Apu {
         }
     }
 
+    // Require an enabled DAC, reload trigger state and enable the channel. Preserve the
+    // wave sample buffer, check initial sweep overflow and report frozen high-shift noise.
     fn trigger_channel(
         &mut self,
         channel: u8,
@@ -600,6 +644,7 @@ impl Apu {
             4 => self.regs[0x11],
             _ => 0,
         };
+        // Retain the previous wave byte across channel triggers instead of eagerly fetching wave RAM.
         let buffered_sample_before = self.channels[idx].wave_sample_buffer;
         {
             let st = &mut self.channels[idx];
@@ -679,6 +724,7 @@ impl Apu {
         }
     }
 
+    // Refresh the frequency shadow; an already running frequency timer is not restarted here.
     fn sync_frequency_from_regs(&mut self, channel: u8) {
         let idx = (channel - 1) as usize;
         self.channels[idx].shadow_frequency = self.current_frequency(channel);
@@ -687,6 +733,7 @@ impl Apu {
         }
     }
 
+    // Combine the three high and eight low pitch bits for tone channels; noise uses its stored shadow.
     fn current_frequency(&self, channel: u8) -> u16 {
         match channel {
             1 => ((u16::from(self.regs[4] & 0x07)) << 8) | u16::from(self.regs[3]),
@@ -696,6 +743,7 @@ impl Apu {
         }
     }
 
+    // Write pitch bits while preserving control flags, update the shadow and restart the timer.
     fn set_current_frequency(&mut self, channel: u8, frequency: u16) {
         let low = (frequency & 0x00FF) as u8;
         let high = ((frequency >> 8) as u8) & 0x07;
@@ -719,6 +767,7 @@ impl Apu {
         self.channels[idx].freq_timer = self.period_for_channel(channel).max(1);
     }
 
+    // Implement this model's active-CGB current-byte alias; otherwise clamp the requested RAM index.
     fn wave_ram_visible_index(&self, requested_index: usize) -> usize {
         if self.cgb_mode && self.is_ch3_active() {
             self.current_wave_ram_byte_index()
@@ -727,16 +776,19 @@ impl Apu {
         }
     }
 
+    // Convert the current 32-position wave nibble index to one of sixteen byte addresses.
     fn current_wave_ram_byte_index(&self) -> usize {
         ((self.channels[2].wave_position as usize) / 2).min(self.wave_ram.len().saturating_sub(1))
     }
 
+    // Require channel state, DAC gate and the public enable mask to agree that wave playback is active.
     fn is_ch3_active(&self) -> bool {
         self.channels[2].enabled
             && self.channels[2].dac_enabled
             && (self.channel_enable & 0x04 != 0)
     }
 
+    // Advance both squares, wave and noise with the same elapsed APU-cycle chunk.
     fn advance_channels(&mut self, cycles: u16) {
         self.advance_square(1, cycles);
         self.advance_square(2, cycles);
@@ -744,6 +796,8 @@ impl Apu {
         self.advance_noise(cycles);
     }
 
+    // Consume frequency deadlines and wrap the eight-step duty phase. The first phase
+    // advance releases the forced-zero digital output installed by a trigger.
     fn advance_square(&mut self, channel: u8, cycles: u16) {
         let idx = (channel - 1) as usize;
         if !self.channels[idx].enabled {
@@ -767,6 +821,8 @@ impl Apu {
         }
     }
 
+    // Advance the 32-nibble position on each deadline, then fetch its containing byte.
+    // A trigger starts at position zero without fetching, so the first advance visits nibble one.
     fn advance_wave(&mut self, cycles: u16) {
         let idx = 2usize;
         if !self.channels[idx].enabled {
@@ -791,6 +847,8 @@ impl Apu {
         }
     }
 
+    // Freeze shifts 14 and 15; otherwise clock XOR feedback into bit 14 and optionally
+    // bit 6 for narrow noise mode at each frequency deadline.
     fn advance_noise(&mut self, cycles: u16) {
         let idx = 3usize;
         if !self.channels[idx].enabled {
@@ -823,6 +881,7 @@ impl Apu {
         }
     }
 
+    // Decrement enabled length counters on the sequencer length steps and turn off expired channels.
     fn clock_length(&mut self, trace: &mut Vec<ApuTraceEvent>) {
         for channel in 1..=4 {
             let idx = (channel - 1) as usize;
@@ -840,6 +899,8 @@ impl Apu {
         }
     }
 
+    // Clock active square/noise envelopes toward the 0..15 limits; zero-period envelopes
+    // do not change volume even though their reload field uses eight.
     fn clock_envelopes(&mut self, trace: &mut Vec<ApuTraceEvent>) {
         for channel in [1u8, 2u8, 4u8] {
             let idx = (channel - 1) as usize;
@@ -873,6 +934,8 @@ impl Apu {
         }
     }
 
+    // Apply channel 1's timed shadow-frequency shift and disable on overflow. A second
+    // calculation checks the following step without applying that second pitch.
     fn clock_sweep(&mut self, trace: &mut Vec<ApuTraceEvent>) {
         if !self.channels[0].enabled || !self.channels[0].dac_enabled {
             return;
@@ -939,6 +1002,8 @@ impl Apu {
         });
     }
 
+    // Emit a raw mixer observation only when left, right or active mask differs from the cached value.
+    // These values precede PCM averaging and output filters.
     fn emit_mixed_output_if_changed(&mut self, trace: &mut Vec<ApuTraceEvent>) {
         let (left, right, active_mask) = self.mix_output();
         if left != self.last_mixed_left
@@ -956,6 +1021,8 @@ impl Apu {
         }
     }
 
+    // Route DAC contributions with NR51 and scale each side by NR50 level plus one.
+    // The zero volume setting still has gain one; VIN inputs are not mixed by this implementation.
     fn mix_output(&self) -> (i16, i16, u8) {
         if !self.master_enabled {
             return (0, 0, 0);
@@ -983,6 +1050,8 @@ impl Apu {
         (left, right, active_mask & self.channel_enable)
     }
 
+    // Map a powered DAC's 0..15 digital input to signed amplitude. A disabled channel
+    // with its DAC still enabled contributes the digital-zero DC level rather than disconnecting.
     fn channel_analog_output(&self, channel: u8) -> i16 {
         let idx = (channel - 1) as usize;
         let st = &self.channels[idx];
@@ -997,10 +1066,12 @@ impl Apu {
         15 - (digital * 2)
     }
 
+    // Determine whether the output filter is connected based on DAC gates, not routing or channel activity.
     fn any_channel_dac_enabled(&self) -> bool {
         self.channels.iter().any(|channel| channel.dac_enabled)
     }
 
+    // Select the model's DMG/CGB high-pass charge coefficient for each generated PCM frame.
     fn hpf_charge_factor(&self) -> f64 {
         if self.cgb_mode {
             APU_HPF_CHARGE_FACTOR_CGB
@@ -1009,6 +1080,7 @@ impl Apu {
         }
     }
 
+    // Select the model's DMG/CGB output-smoothing coefficient.
     fn output_lpf_alpha(&self) -> f64 {
         if self.cgb_mode {
             APU_OUTPUT_LPF_ALPHA_CGB
@@ -1017,6 +1089,7 @@ impl Apu {
         }
     }
 
+    // Update independent first-order left/right low-pass histories toward the new samples.
     fn apply_output_low_pass(&mut self, left: f64, right: f64) -> (f64, f64) {
         let alpha = self.output_lpf_alpha();
         self.pcm_lpf_left += (left - self.pcm_lpf_left) * alpha;
@@ -1024,6 +1097,7 @@ impl Apu {
         (self.pcm_lpf_left, self.pcm_lpf_right)
     }
 
+    // Gate disabled channels, then read duty/envelope, scaled wave nibble or inverted noise-bit output.
     fn channel_digital_output(&self, channel: u8) -> u8 {
         let idx = (channel - 1) as usize;
         let st = &self.channels[idx];
@@ -1049,6 +1123,8 @@ impl Apu {
         }
     }
 
+    // Average accumulated mix contributions, apply gain and connected filters, then queue
+    // one stereo frame. Evict oldest complete frames at capacity and count those overflow losses.
     fn enqueue_pcm_frame(&mut self, dropped_frames: &mut u16) {
         let accum_cycles = i32::from(self.pcm_accum_cycles.max(1));
         let averaged_left = self.pcm_accum_left / accum_cycles;
@@ -1067,6 +1143,7 @@ impl Apu {
             let (out_left, out_right) = self.apply_output_low_pass(out_left, out_right);
             (clamp_pcm_i16(out_left), clamp_pcm_i16(out_right))
         } else {
+            // With all DACs disconnected, silence and reset low-pass history while preserving high-pass charge.
             self.pcm_lpf_left = 0.0;
             self.pcm_lpf_right = 0.0;
             (0, 0)
@@ -1082,6 +1159,8 @@ impl Apu {
         self.pcm_frames_generated = self.pcm_frames_generated.saturating_add(1);
     }
 
+    // Convert tone pitch to APU cycles or form the noise divisor/shift in u16 arithmetic.
+    // checked_shl checks the shift amount; it does not saturate bits shifted out of a u16.
     fn period_for_channel(&self, channel: u8) -> u16 {
         match channel {
             1 | 2 => {
@@ -1104,6 +1183,7 @@ impl Apu {
         }
     }
 
+    // Read the length-enable bit from the corresponding channel control register.
     fn length_enabled(&self, channel: u8) -> bool {
         match channel {
             1 => self.regs[4] & 0x40 != 0,
@@ -1114,6 +1194,7 @@ impl Apu {
     }
 }
 
+// Select the duty bit and return its envelope level, unless trigger startup still forces zero.
 fn square_digital_output(duty_reg: u8, st: &ChannelState) -> i16 {
     if st.force_zero_until_advance {
         return 0;
@@ -1127,6 +1208,7 @@ fn square_digital_output(duty_reg: u8, st: &ChannelState) -> i16 {
     }
 }
 
+// Read the high nibble at even wave positions and low nibble at odd positions from the held byte.
 fn wave_channel_sample(st: &ChannelState) -> u8 {
     if st.wave_position & 1 == 0 {
         st.wave_sample_buffer >> 4
@@ -1135,12 +1217,14 @@ fn wave_channel_sample(st: &ChannelState) -> u8 {
     }
 }
 
+// Round the floating-point filter output and saturate it to signed 16-bit PCM.
 fn clamp_pcm_i16(sample: f64) -> i16 {
     sample
         .round()
         .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
 }
 
+// Convert a six-bit length load to a counter in 1..64 for square/noise channels.
 fn decode_length_square(value: u8) -> u16 {
     let raw = 64 - u16::from(value & 0x3F);
     if raw == 0 {
@@ -1150,6 +1234,7 @@ fn decode_length_square(value: u8) -> u16 {
     }
 }
 
+// Convert an eight-bit wave length load to a counter in 1..256.
 fn decode_length_wave(value: u8) -> u16 {
     let raw = 256 - u16::from(value);
     if raw == 0 {
@@ -1159,6 +1244,7 @@ fn decode_length_wave(value: u8) -> u16 {
     }
 }
 
+// Use the wave channel's 256-step limit and a 64-step limit for the other channels.
 fn max_length(channel: u8) -> u16 {
     if channel == 3 {
         256
@@ -1167,6 +1253,7 @@ fn max_length(channel: u8) -> u16 {
     }
 }
 
+// Map trigger-register addresses to one-based channel numbers without checking the trigger bit.
 fn trigger_channel(addr: u16) -> Option<u8> {
     match addr {
         0xFF14 => Some(1),
@@ -1182,6 +1269,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Check that powering off emits a toggle event and clears the enabled-channel mask.
     fn master_toggle_clears_channel_state() {
         let mut apu = Apu::default();
         apu.write(0xFF26, 0x80);
@@ -1196,6 +1284,7 @@ mod tests {
     }
 
     #[test]
+    // Check no trace while powered off and the first sequencer-step event after power-on.
     fn frame_sequencer_advances_only_when_enabled() {
         let mut apu = Apu::default();
         assert!(apu.tick(8192).trace.is_empty());
@@ -1207,6 +1296,7 @@ mod tests {
     }
 
     #[test]
+    // Check mixer-control and changed-output trace availability for a synthetic square-channel setup.
     fn mixer_write_and_mixed_output_are_observable() {
         let mut apu = Apu::default();
         apu.write(0xFF26, 0x80);
@@ -1226,6 +1316,7 @@ mod tests {
     }
 
     #[test]
+    // Check PCM generation reporting, a nonempty queue and complete draining of available frames.
     fn pcm_frames_are_buffered_and_drained() {
         let mut apu = Apu::default();
         apu.write(0xFF26, 0x80);
@@ -1246,6 +1337,7 @@ mod tests {
     }
 
     #[test]
+    // Check configured capacity changes and zero rejection; this case does not fill or shrink a populated queue.
     fn pcm_buffer_capacity_can_be_resized() {
         let mut apu = Apu::default();
         assert_eq!(
@@ -1259,6 +1351,7 @@ mod tests {
     }
 
     #[test]
+    // Check a nonzero channel-1 digital tap after advancing the triggered square wave.
     fn pcm_registers_reflect_current_channel_outputs() {
         let mut apu = Apu::default();
         apu.write(0xFF26, 0x80);
@@ -1273,6 +1366,7 @@ mod tests {
     }
 
     #[test]
+    // Check this model's CGB wave-RAM alias and trace at a manually selected wave position.
     fn cgb_wave_ram_access_aliases_current_byte_while_ch3_active() {
         let mut apu = Apu::default();
         apu.set_cgb_mode(true);
@@ -1296,6 +1390,7 @@ mod tests {
     }
 
     #[test]
+    // Check this model's active-DMG read rejection and ignored write with its diagnostic alias marker.
     fn dmg_wave_ram_reads_ff_and_writes_are_ignored_while_ch3_active() {
         let mut apu = Apu::default();
         apu.set_cgb_mode(false);
@@ -1321,6 +1416,7 @@ mod tests {
     }
 
     #[test]
+    // Check the held nibble after trigger and the first fetched low nibble after one wave period.
     fn ch3_trigger_retains_existing_sample_buffer_byte_and_skips_first_sample() {
         let mut apu = Apu::default();
         apu.write(0xFF26, 0x80);
@@ -1345,6 +1441,7 @@ mod tests {
     }
 
     #[test]
+    // Check DAC-change and possible-pop events; this does not measure playback sound.
     fn disabling_dac_reports_pop_risk() {
         let mut apu = Apu::default();
         apu.write(0xFF26, 0x80);
@@ -1368,6 +1465,7 @@ mod tests {
     }
 
     #[test]
+    // Check the frozen-clock event on a shift-14 noise trigger without measuring later waveform timing.
     fn high_shift_noise_mode_reports_frozen_clock() {
         let mut apu = Apu::default();
         apu.write(0xFF26, 0x80);
@@ -1384,6 +1482,7 @@ mod tests {
     }
 
     #[test]
+    // Check silent output with all DACs off while retained high-pass charge remains unchanged.
     fn hpf_disconnects_when_all_dacs_are_off() {
         let mut apu = Apu::default();
         apu.write(0xFF26, 0x80);
@@ -1400,6 +1499,7 @@ mod tests {
     }
 
     #[test]
+    // Check directional convergence and bounded response to an abrupt input reversal.
     fn output_low_pass_smooths_abrupt_pcm_edges() {
         let mut apu = Apu::default();
 
@@ -1416,6 +1516,8 @@ mod tests {
     }
 
     #[test]
+    // Inject 120 constant mix averages and check retained amplitude; this is a filter
+    // regression assertion rather than a hardware waveform or sustained-tone listening test.
     fn cgb_hpf_keeps_sustained_tones_audible() {
         let mut apu = Apu::default();
         apu.set_cgb_mode(true);
@@ -1437,6 +1539,7 @@ mod tests {
     }
 
     #[test]
+    // Check nonempty, nonzero, varying PCM from a synthetic noise setup; exact spectral accuracy is not asserted.
     fn noise_channel_produces_varying_pcm_frames() {
         let mut apu = Apu::default();
         apu.write(0xFF26, 0x80);

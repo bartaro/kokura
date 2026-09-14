@@ -6,6 +6,8 @@ use serde::Serialize;
 use crate::session::DebugSession;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// The selected-peer adapter routes one host/peer pair at a time; Dmg07 uses its
+// separate modeled discovery/broadcast protocol with runner index matching port index.
 pub enum LinkTopology {
     Pair,
     FourPlayerAdapter {
@@ -18,6 +20,7 @@ pub enum LinkTopology {
 }
 
 impl LinkTopology {
+    // Return the stable topology label used in serialized run summaries.
     fn label(self) -> &'static str {
         match self {
             Self::Pair => "pair",
@@ -26,6 +29,8 @@ impl LinkTopology {
         }
     }
 
+    // Require two sessions for a cable pair or two through four for either adapter.
+    // The selected-peer topology also requires distinct in-range host and peer indices.
     fn validate_session_count(self, session_count: usize) -> Result<(), LinkRunnerError> {
         match self {
             Self::Pair => {
@@ -80,6 +85,7 @@ impl LinkTopology {
         }
     }
 
+    // Validate indices/count first; DMG-07 broadcasts to ports and therefore has no active pair.
     fn active_pair(self, session_count: usize) -> Result<Option<(usize, usize)>, LinkRunnerError> {
         self.validate_session_count(session_count)?;
         Ok(match self {
@@ -94,6 +100,8 @@ impl LinkTopology {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+// Counts describe this call's observed progress. A returned summary may be partial
+// after a debug stop and is not proof that every requested frame completed.
 pub struct LinkRunSummary {
     pub topology: String,
     pub session_count: usize,
@@ -110,6 +118,7 @@ pub struct LinkRunSummary {
 }
 
 impl LinkRunSummary {
+    // Validate the topology and allocate one zeroed counter per supplied session.
     fn new(topology: LinkTopology, session_count: usize) -> Result<Self, LinkRunnerError> {
         Ok(Self {
             topology: topology.label().to_string(),
@@ -127,6 +136,8 @@ impl LinkRunSummary {
         })
     }
 
+    // Saturating-add compatible run totals, retain the first stop and latest available pair.
+    // The caller must combine matching session layouts; extra incoming vector entries are ignored.
     pub fn absorb(&mut self, other: Self) {
         self.total_steps = self.total_steps.saturating_add(other.total_steps);
         self.exchange_count = self.exchange_count.saturating_add(other.exchange_count);
@@ -164,6 +175,7 @@ pub enum LinkRunnerError {
 }
 
 impl fmt::Display for LinkRunnerError {
+    // Display the original core error or the topology-specific explanation without losing its message.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Core(err) => write!(f, "{err}"),
@@ -173,6 +185,7 @@ impl fmt::Display for LinkRunnerError {
 }
 
 impl Error for LinkRunnerError {
+    // Preserve a core failure as an error-chain source; topology failures have no nested error.
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Core(err) => Some(err),
@@ -182,6 +195,7 @@ impl Error for LinkRunnerError {
 }
 
 impl From<CoreError> for LinkRunnerError {
+    // Wrap machine execution failures so the link runner can propagate them with the question-mark operator.
     fn from(value: CoreError) -> Self {
         Self::Core(value)
     }
@@ -210,6 +224,8 @@ enum Dmg07Phase {
 }
 
 #[derive(Debug, Clone)]
+// Mutable protocol state survives runner calls. SIZE is bounded to 1..4 bytes per port;
+// this in-process model does not simulate electrical cable behavior.
 struct Dmg07Adapter {
     session_count: Option<usize>,
     phase: Dmg07Phase,
@@ -226,6 +242,7 @@ struct Dmg07Adapter {
 }
 
 impl Default for Dmg07Adapter {
+    // Start unbound at the first ping byte, with no connected ports or scheduled transfer deadline.
     fn default() -> Self {
         Self {
             session_count: None,
@@ -247,6 +264,8 @@ impl Default for Dmg07Adapter {
 }
 
 impl Dmg07Adapter {
+    // Bind this persistent adapter to the first participant count and reject later count changes.
+    // Topology validation by the runner supplies the separate two-through-four range check.
     fn bind_session_count(&mut self, session_count: usize) -> Result<(), LinkRunnerError> {
         if let Some(bound) = self.session_count {
             if bound != session_count {
@@ -261,6 +280,8 @@ impl Dmg07Adapter {
         Ok(())
     }
 
+    // Apply one parallel byte exchange to the current protocol phase. Timing is deliberately
+    // separate: the runner checks transfer_due and schedules the next deadline around this call.
     fn transfer(&mut self, outgoing: &[u8]) -> Result<Vec<u8>, LinkRunnerError> {
         self.bind_session_count(outgoing.len())?;
         match self.phase {
@@ -275,20 +296,25 @@ impl Dmg07Adapter {
         }
     }
 
+    // Convert modeled microsecond delays to base-clock cycles, rounding up with saturating arithmetic.
     fn cycles_for_micros(micros: u64) -> u64 {
         DMG07_CPU_HZ.saturating_mul(micros).saturating_add(999_999) / 1_000_000
     }
 
+    // Permit the first transfer immediately; subsequent transfers wait for the recorded absolute cycle.
     fn transfer_due(&self, cycle: u64) -> bool {
         self.next_transfer_cycle.is_none_or(|next| cycle >= next)
     }
 
+    // Use the rate high nibble to extend the modeled per-byte transmission interval.
     fn transmission_byte_interval_cycles(&self) -> u64 {
         let micros = DMG07_TX_BASE_BYTE_INTERVAL_US
             + u64::from(self.rate >> 4) * DMG07_TX_RATE_NIBBLE_INTERVAL_US;
         Self::cycles_for_micros(micros)
     }
 
+    // Choose a packet period covering both the rate-dependent minimum and serialized
+    // bytes plus overhead, then subtract elapsed byte intervals to obtain the final gap.
     fn transmission_packet_tail_cycles(&self, byte_count: usize) -> u64 {
         let interval = self.transmission_byte_interval_cycles();
         let minimum_period = Self::cycles_for_micros(
@@ -302,6 +328,8 @@ impl Dmg07Adapter {
         period.saturating_sub(elapsed).max(interval)
     }
 
+    // Schedule from the phase and byte index that just completed, even when transfer
+    // already changed the current phase. Deadline time uses the runner's shared cycle observation.
     fn schedule_after_transfer(&mut self, cycle: u64, completed_phase: Dmg07Phase) {
         let delay = match completed_phase {
             Dmg07Phase::Ping { byte_index } => {
@@ -334,7 +362,11 @@ impl Dmg07Adapter {
         self.next_transfer_cycle = Some(cycle.saturating_add(delay));
     }
 
+    // Return the current ping header/status, collect per-port replies and recognize ACK
+    // or Player-1 start packets. Rate and bounded packet size are accepted from Player 1 only.
     fn transfer_ping(&mut self, outgoing: &[u8], byte_index: usize) -> Vec<u8> {
+        // Compute the returned status before consuming this byte's reply; newly recognized
+        // ACK prefixes therefore become visible in subsequent bytes.
         let incoming = (0..outgoing.len())
             .map(|slot| {
                 if byte_index == 0 {
@@ -401,6 +433,7 @@ impl Dmg07Adapter {
         incoming
     }
 
+    // Broadcast four confirmation bytes, then initialize transmission buffers; outgoing bytes are ignored.
     fn transfer_confirm(&mut self, outgoing: &[u8], byte_index: usize) -> Vec<u8> {
         let incoming = vec![DMG07_CONFIRM; outgoing.len()];
         if byte_index == 3 {
@@ -413,6 +446,8 @@ impl Dmg07Adapter {
         incoming
     }
 
+    // Broadcast the previously captured packet while collecting each connected port
+    // for the next packet. A restart request waits until the current full broadcast completes.
     fn transfer_payload(&mut self, outgoing: &[u8], byte_index: usize) -> Vec<u8> {
         let restart_requested = self.observe_restart_request(outgoing, byte_index);
         let incoming_byte = self.broadcast_packet[byte_index];
@@ -438,6 +473,8 @@ impl Dmg07Adapter {
                 self.restart_pending = false;
                 self.phase = Dmg07Phase::Restart { byte_index: 0 };
             } else {
+                // Concatenate all four port buffers in port order, including deterministic zero slots
+                // for absent/unconnected ports; reset captures for the following packet.
                 let mut next_broadcast = Vec::with_capacity(packet_size * DMG07_PORT_COUNT);
                 for slot in 0..DMG07_PORT_COUNT {
                     next_broadcast.extend_from_slice(&self.capture_packets[slot]);
@@ -454,6 +491,7 @@ impl Dmg07Adapter {
         incoming
     }
 
+    // Emit one aligned all-FF packet of SIZE times four bytes, then restart discovery.
     fn transfer_restart(&mut self, session_count: usize, byte_index: usize) -> Vec<u8> {
         let incoming = vec![0xFF; session_count];
         let restart_packet_len = usize::from(self.packet_size) * DMG07_PORT_COUNT;
@@ -467,6 +505,8 @@ impl Dmg07Adapter {
         incoming
     }
 
+    // Size all port buffers and start with deterministic zero warm-up data, retaining
+    // the connected-port mask and negotiated rate.
     fn begin_transmission(&mut self) {
         let packet_size = usize::from(self.packet_size);
         self.capture_packets = std::array::from_fn(|_| vec![0; packet_size]);
@@ -479,6 +519,8 @@ impl Dmg07Adapter {
         self.phase = Dmg07Phase::Transmission { byte_index: 0 };
     }
 
+    // Clear discovery/restart state and return to ping while retaining the bound count,
+    // rate and packet size. The caller schedules the next deadline separately.
     fn restart_ping(&mut self) {
         self.phase = Dmg07Phase::Ping { byte_index: 0 };
         self.connected_mask = 0;
@@ -487,6 +529,8 @@ impl Dmg07Adapter {
         self.restart_pending = false;
     }
 
+    // Recognize three consecutive FF bytes beginning at the broadcast packet boundary
+    // from any connected port. A run beginning later in the packet does not qualify.
     fn observe_restart_request(&mut self, outgoing: &[u8], byte_index: usize) -> bool {
         for (slot, value) in outgoing.iter().copied().enumerate() {
             if byte_index == 0 {
@@ -500,14 +544,17 @@ impl Dmg07Adapter {
         self.restart_ff_runs.iter().any(|run| *run >= 3)
     }
 
+    // Combine the upper-nibble connection mask with the one-based player ID in the low nibble.
     fn status_for_slot(&self, slot: usize) -> u8 {
         self.connected_mask | ((slot + 1) as u8)
     }
 
+    // Test the connection bit for a validated zero-based port slot.
     fn is_connected(&self, slot: usize) -> bool {
         self.connected_mask & (0x10_u8 << slot) != 0
     }
 
+    // Change only the selected port's connection bit, preserving the other three ports.
     fn set_connected(&mut self, slot: usize, connected: bool) {
         let bit = 0x10_u8 << slot;
         if connected {
@@ -519,12 +566,15 @@ impl Dmg07Adapter {
 }
 
 #[derive(Debug, Clone)]
+// A runner owns persistent DMG-07 state through RefCell. Use a separate runner for
+// an independent group; simultaneous reentrant adapter access is not supported.
 pub struct TimingAwareLinkRunner {
     topology: LinkTopology,
     dmg07: RefCell<Dmg07Adapter>,
 }
 
 impl TimingAwareLinkRunner {
+    // Store the topology and fresh interior-mutable adapter state; session-count validation waits until a run.
     pub fn new(topology: LinkTopology) -> Self {
         Self {
             topology,
@@ -532,6 +582,7 @@ impl TimingAwareLinkRunner {
         }
     }
 
+    // Return the configured topology without resetting discovery or transmission state.
     pub fn topology(&self) -> LinkTopology {
         self.topology
     }
@@ -540,6 +591,8 @@ impl TimingAwareLinkRunner {
     /// cable without collecting debugger events. One side must arm the
     /// internal clock and the other the external clock before a byte is
     /// exchanged.
+    // Attach two machines and advance the eligible one with the lowest cycle count,
+    // using index to break ties. The attachment remains after return; errors retain partial execution.
     pub fn run_pair_machine_frames(
         &self,
         machines: &mut [&mut Machine],
@@ -602,6 +655,8 @@ impl TimingAwareLinkRunner {
     /// collecting the debugger's per-instruction event stream.  Realtime
     /// frontends use this path so a four-player session can run indefinitely
     /// without accumulating debug events.
+    // Advance each machine toward its relative frame target while retaining the adapter
+    // across calls. All configured ports must arm external-clock transfers before any adapter byte is delivered.
     pub fn run_dmg07_machine_frames(
         &self,
         machines: &mut [&mut Machine],
@@ -682,6 +737,8 @@ impl TimingAwareLinkRunner {
         Ok(summary)
     }
 
+    // Run a total debug-step budget shared across sessions in cycle order. Exchange after
+    // each step, then stop the whole pump when that step reports a breakpoint or unsupported opcode.
     pub fn pump_instructions(
         &self,
         sessions: &mut [&mut DebugSession],
@@ -717,6 +774,8 @@ impl TimingAwareLinkRunner {
         Ok(summary)
     }
 
+    // Give each session a relative frame target and schedule eligible debug steps by cycle count.
+    // A newly triggered debug stop ends this call before all targets necessarily complete.
     pub fn run_frames(
         &self,
         sessions: &mut [&mut DebugSession],
@@ -757,6 +816,7 @@ impl TimingAwareLinkRunner {
         Ok(summary)
     }
 
+    // Refresh symbol-driven peer selection and record observed pair changes after execution has begun.
     fn refresh_active_pair(
         &self,
         sessions: &[&mut DebugSession],
@@ -773,6 +833,8 @@ impl TimingAwareLinkRunner {
         Ok(())
     }
 
+    // Prefer the host's recognized link-library peer variable when available, otherwise
+    // use the configured peer. The DMG-07 broadcast path does not use this selector.
     fn resolve_active_pair(
         &self,
         sessions: &[&mut DebugSession],
@@ -796,6 +858,7 @@ impl TimingAwareLinkRunner {
         })
     }
 
+    // Keep DMG-07 port count consistent with previous calls without resetting its protocol phase.
     fn prepare_backplane(&self, session_count: usize) -> Result<(), LinkRunnerError> {
         if self.topology == LinkTopology::Dmg07 {
             self.dmg07.borrow_mut().bind_session_count(session_count)?;
@@ -803,6 +866,7 @@ impl TimingAwareLinkRunner {
         Ok(())
     }
 
+    // Dispatch to broadcast or selected-pair exchange and count only completed byte transactions.
     fn try_exchange(
         &self,
         sessions: &mut [&mut DebugSession],
@@ -832,6 +896,8 @@ impl TimingAwareLinkRunner {
         Ok(())
     }
 
+    // Require every session to be armed on external clock and the minimum machine cycle
+    // to reach the adapter deadline, then complete one parallel byte through each debug session.
     fn try_exchange_dmg07(
         &self,
         sessions: &mut [&mut DebugSession],
@@ -870,6 +936,8 @@ impl TimingAwareLinkRunner {
         Ok(true)
     }
 
+    // Skip stopped or target-complete sessions and select the smallest (cycle, index) pair.
+    // A supplied target slice must have an entry for every session.
     fn next_session_index(
         sessions: &[&mut DebugSession],
         frame_targets: Option<&[u64]>,
@@ -884,12 +952,15 @@ impl TimingAwareLinkRunner {
             .min_by_key(|&index| (sessions[index].machine.clocks.cycles, index))
     }
 
+    // Mark every machine as cable-attached; this helper does not restore prior attachment flags.
     fn attach_backplane(sessions: &mut [&mut DebugSession]) {
         for session in sessions {
             session.machine.set_serial_link_attached(true);
         }
     }
 
+    // Borrow distinct sessions safely, require both transfers active with opposite clock
+    // roles, then delegate byte completion to the debug-session exchange path.
     fn try_exchange_pair(sessions: &mut [&mut DebugSession], left: usize, right: usize) -> bool {
         if left == right || left >= sessions.len() || right >= sessions.len() {
             return false;
@@ -928,6 +999,7 @@ mod tests {
     use crate::session::DebugSession;
 
     #[test]
+    // Check one armed byte exchange, received bytes, interrupt counts and a debug completion event.
     fn pair_runner_completes_serial_exchange() {
         let mut left = DebugSession::new(Machine::new());
         let mut right = DebugSession::new(Machine::new());
@@ -958,6 +1030,7 @@ mod tests {
     }
 
     #[test]
+    // Use original synthetic ROM bytes to check the non-debug pair runner exchanges one armed byte.
     fn realtime_pair_runner_exchanges_machine_bytes() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0x00;
@@ -983,6 +1056,7 @@ mod tests {
     }
 
     #[test]
+    // Check that only the configured host/peer exchange while another armed peer stays pending.
     fn four_player_adapter_targets_selected_peer_only() {
         let mut host = DebugSession::new(Machine::new());
         let mut peer_a = DebugSession::new(Machine::new());
@@ -1021,6 +1095,7 @@ mod tests {
     }
 
     #[test]
+    // Supply link-library variable metadata and verify its peer selection overrides the configured default.
     fn four_player_adapter_follows_host_selected_peer_variable() {
         let mut host = DebugSession::new(Machine::new());
         let mut peer_a = DebugSession::new(Machine::new());
@@ -1086,6 +1161,7 @@ mod tests {
     }
 
     #[test]
+    // Check discovery replies, connected status, Player-1 parameters and the model's maximum packet-size clamp.
     fn dmg07_ping_parses_ack_rate_size_and_updates_status() {
         let mut adapter = Dmg07Adapter::default();
 
@@ -1108,6 +1184,8 @@ mod tests {
     }
 
     #[test]
+    // Check modeled ping deadlines just before/at due time and the resulting approximate packet period.
+    // These assertions compare model constants, not measurements from a physical adapter.
     fn dmg07_power_up_ping_uses_hardware_byte_and_packet_spacing() {
         let mut adapter = Dmg07Adapter::default();
         let mut cycle = 0u64;
@@ -1134,6 +1212,7 @@ mod tests {
     }
 
     #[test]
+    // Check that a zero rate reply retains the previous transmission and ping rate.
     fn dmg07_zero_rate_reply_preserves_existing_speed() {
         let mut adapter = Dmg07Adapter::default();
         adapter.rate = 0x28;
@@ -1147,6 +1226,8 @@ mod tests {
     }
 
     #[test]
+    // Check aligned start, confirmation, deterministic warm-up and the next packet
+    // containing captured port data with zeros for unused ports.
     fn dmg07_player_one_start_confirms_then_broadcasts_with_one_packet_delay() {
         let mut adapter = Dmg07Adapter::default();
 
@@ -1196,6 +1277,7 @@ mod tests {
     }
 
     #[test]
+    // Check that one internal-clock participant prevents adapter exchange until rearmed externally.
     fn dmg07_runner_only_clocks_armed_external_transfers() {
         let mut player_one = DebugSession::new(Machine::new());
         let mut player_two = DebugSession::new(Machine::new());
@@ -1225,6 +1307,7 @@ mod tests {
     }
 
     #[test]
+    // Check four machines each advance one frame and receive the initial ping header.
     fn dmg07_realtime_machine_runner_advances_four_players_and_exchanges() {
         let mut players = std::array::from_fn::<_, 4, _>(|_| Machine::new());
         for player in &mut players {
@@ -1243,6 +1326,8 @@ mod tests {
     }
 
     #[test]
+    // Reject unaligned FF runs, accept a connected peer's aligned request and complete
+    // the old packet before emitting the restart indicator and returning to discovery.
     fn dmg07_connected_peer_can_request_ff_restart_indicator_then_ping() {
         let mut adapter = Dmg07Adapter::default();
 
@@ -1285,7 +1370,11 @@ mod tests {
     }
 
     #[test]
+    // Optionally load a caller-provided ROM and log 64 model exchanges within a step cap.
+    // This fixture bypasses adapter scheduling and asserts the count, not particular initial reply bytes.
     fn dmg07_external_rom_fixture_reports_initial_ping_bytes() {
+        // With no external fixture configured this test returns immediately; a passing harness
+        // result then provides no external-ROM execution evidence.
         let Some(path) = std::env::var_os("KOKURA_DMG07_ROM") else {
             return;
         };
@@ -1334,6 +1423,7 @@ mod tests {
     }
 
     #[test]
+    // Check count rejection at one/five and acceptance at two/four sessions.
     fn dmg07_topology_rejects_non_physical_session_counts() {
         assert!(LinkTopology::Dmg07.validate_session_count(1).is_err());
         assert!(LinkTopology::Dmg07.validate_session_count(2).is_ok());

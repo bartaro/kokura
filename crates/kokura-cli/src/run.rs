@@ -1,7 +1,7 @@
-//! ROM実行、観測、画像・音声・レポート出力のオーケストレーション。
+//! Coordinate ROM execution, observation and image/audio/report output.
 //!
-//! このファイルはCLI固有の入出力を担当し、エミュレーションの状態遷移は
-//! `kokura-core`、診断とレポートの型は `kokura-debug` に委譲します。
+//! Keep CLI-specific I/O here; delegate emulation state transitions to
+//! kokura-core and diagnostic/report data types to kokura-debug.
 
 use std::{
     borrow::Cow,
@@ -50,6 +50,7 @@ use crate::{
 pub const CLI_OUTPUT_SCHEMA_VERSION: &str = "1";
 
 #[derive(Debug, Clone, Serialize)]
+// Keep an actionable capture proposal separate from any snapshot actually taken.
 struct SnapshotSuggestion {
     kind: String,
     value: String,
@@ -58,6 +59,7 @@ struct SnapshotSuggestion {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+// Identify which observation point produced a timeline row or condition match.
 enum ObservationBasis {
     FrameStart,
     Step,
@@ -69,6 +71,7 @@ enum ObservationBasis {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Combine sampled execution coordinates with bounded watch/event summaries and optional detailed values.
 struct TimelineRow {
     basis: ObservationBasis,
     label: String,
@@ -108,6 +111,7 @@ enum ObservationTerm {
 }
 
 #[derive(Debug, Clone)]
+// Store terms that must all match one observation; evaluation happens in condition_matches.
 struct ObservationCondition {
     terms: Vec<ObservationTerm>,
 }
@@ -132,6 +136,7 @@ struct TracePointRequest {
 }
 
 #[derive(Debug, Clone, Default)]
+// Limit serialized report/watch fields without changing the underlying execution or report data.
 struct OutputFilterOptions {
     report_sections: Option<BTreeSet<String>>,
     watch_fields: Option<BTreeSet<String>>,
@@ -144,6 +149,7 @@ struct TimelineWriter {
 }
 
 impl TimelineWriter {
+    // Create or truncate a buffered timeline file; parent-directory creation is the caller's responsibility.
     fn create(path: &str, format: TimelineFormatArg) -> Result<Self> {
         let file = fs::File::create(path)
             .with_context(|| format!("failed to create timeline output: {path}"))?;
@@ -154,6 +160,8 @@ impl TimelineWriter {
         })
     }
 
+    // Write full JSONL rows or a reduced CSV-shaped field list with a single header.
+    // The current CSV branch uses JSON string escaping; embedded quotes are not RFC-style CSV escaping.
     fn write_row(&mut self, row: &TimelineRow) -> Result<()> {
         match self.format {
             TimelineFormatArg::Jsonl => {
@@ -190,6 +198,7 @@ impl TimelineWriter {
         Ok(())
     }
 
+    // Flush buffered timeline bytes so output errors are returned before the writer is dropped.
     fn finish(&mut self) -> Result<()> {
         self.writer.flush().map_err(anyhow::Error::from)
     }
@@ -202,12 +211,15 @@ struct FrameRange {
 }
 
 impl FrameRange {
+    // Test inclusive frame bounds for capture selection.
     fn contains(self, frame: u64) -> bool {
         frame >= self.start && frame <= self.end
     }
 }
 
 #[derive(Debug, Clone)]
+// Buffer selected screenshots, RGB555 companions, video frames and audio until output is flushed.
+// Executed-frame counting is relative to this capture run, independent of restored machine frame totals.
 struct OutputCaptureState {
     screenshot_path: Option<String>,
     screenshot_range: Option<FrameRange>,
@@ -224,6 +236,7 @@ struct OutputCaptureState {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Attach one stage report, optional saved state and heuristic difference/capture suggestions.
 struct StageOutput {
     schema_version: &'static str,
     stage_index: usize,
@@ -239,6 +252,7 @@ struct StageOutput {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
+// Serialize either a single report or a staged object without an extra enum tag.
 enum OutputEnvelope {
     Single(DebugReport),
     Staged {
@@ -250,6 +264,7 @@ enum OutputEnvelope {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Wrap replay observations with ROM identity metadata; loading this structure alone does not validate identity.
 struct ReplayTapeEnvelope {
     schema_version: String,
     rom_path: String,
@@ -272,6 +287,7 @@ struct RegressionMatrixOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Retain actual metrics and per-expectation outcomes so skipped, executed and failed cases remain distinguishable.
 struct RegressionCaseResult {
     name: String,
     job: String,
@@ -322,6 +338,7 @@ struct RegressionCaseResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Report requested link frames alongside actual runner/session results; requested duration alone is not completion proof.
 struct LinkOutputEnvelope {
     schema_version: &'static str,
     link_job_schema_version: &'static str,
@@ -344,6 +361,9 @@ struct LinkSessionOutput {
     saved_state: Option<String>,
 }
 
+// Dispatch by output mode in priority order: decompile, disassemble, regression matrix,
+// link job, inline link, then ordinary execution. Write the selected report or print JSON;
+// a completed regression command returns success even if its result contains failed cases.
 pub fn run(args: Args) -> Result<()> {
     if let Some(path) = &args.decompile_out {
         let rendered = run_decompile(&args)?;
@@ -405,6 +425,8 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
+// Create parent directories and write native diagnostic aggregates, or synthesize rows
+// from report diagnostics only when the native event list is empty. Flush before returning.
 fn write_sarakura_diagnostics_jsonl(
     path: &str,
     events: &[DiagnosticEvent],
@@ -435,6 +457,7 @@ fn write_sarakura_diagnostics_jsonl(
     Ok(())
 }
 
+// Serialize the same native-or-report diagnostic choice into an in-memory UTF-8 JSONL string.
 fn diagnostic_events_jsonl_string(
     events: &[DiagnosticEvent],
     report: &DebugReport,
@@ -451,6 +474,8 @@ fn diagnostic_events_jsonl_string(
     String::from_utf8(buf).map_err(anyhow::Error::from)
 }
 
+// Adapt report diagnostics to SARAKURA event rows using current report PC/frame and
+// a count of one. These synthesized coordinates are not original per-access observations.
 fn write_report_diagnostics_as_events<W: Write>(
     writer: &mut W,
     report: &DebugReport,
@@ -485,6 +510,8 @@ fn write_report_diagnostics_as_events<W: Write>(
     Ok(())
 }
 
+// Map code-name substrings to broad SARAKURA categories in priority order; this is
+// a compatibility classification and does not prove the specific fault named by that category.
 fn map_kokura_diagnostic_code_to_sarakura(code: &str) -> &'static str {
     let upper = code.to_ascii_uppercase();
     if upper.contains("VRAM")
@@ -510,6 +537,7 @@ fn map_kokura_diagnostic_code_to_sarakura(code: &str) -> &'static str {
     }
 }
 
+// Match any report diagnostic by all, case-insensitive code/category equality or message substring.
 fn diagnostic_break_matches(report: &DebugReport, filters: &[String]) -> bool {
     if filters
         .iter()
@@ -530,6 +558,8 @@ fn diagnostic_break_matches(report: &DebugReport, filters: &[String]) -> bool {
     })
 }
 
+// When report diagnostics exist, save the current screen/state under fixed diagnostic_000001
+// filenames. Repeated calls can overwrite them; capture reflects current session state, not each event time.
 fn capture_diagnostic_artifacts(
     job: &LoadedJob,
     session: &DebugSession,
@@ -561,6 +591,8 @@ fn capture_diagnostic_artifacts(
     Ok(())
 }
 
+// Create a ZIP containing the report, diagnostics and manifest. ROM/metadata paths
+// are references; this bundle does not embed their files, screenshots, snapshots or traces.
 fn write_kokura_repro_bundle(
     path: &str,
     job: &LoadedJob,
@@ -593,6 +625,7 @@ fn write_kokura_repro_bundle(
         "platform": "gb",
         "rom": {
             "path": job.rom_path,
+            // This hash comes from attached build metadata, not a fresh hash of the ROM bytes read by this function.
             "hash": report.toolchain_build.as_ref().and_then(|build| build.output_sha256.clone())
         },
         "metadata": job.toolchain_metadata_path,
@@ -626,6 +659,7 @@ struct DisassembleOutput {
     ranges: Vec<DisassembleRangeOutput>,
 }
 
+// Load the selected ROM, require explicit ranges and render decoded ranges as JSON, Markdown or text.
 fn run_disassemble(args: &Args) -> Result<String> {
     let (rom_path, _, _, _, _, _) = resolve_decompile_inputs(args)?;
     let rom = fs::read(&rom_path)
@@ -660,6 +694,7 @@ fn run_disassemble(args: &Args) -> Result<String> {
     }
 }
 
+// Parse hexadecimal BANK:START-END, reject reversed bounds and leave ROM-window validation to the decoder.
 fn parse_disassemble_range(spec: &str) -> Result<(u16, u16, u16)> {
     let (bank_text, addr_text) = spec
         .split_once(':')
@@ -679,6 +714,7 @@ fn parse_disassemble_range(spec: &str) -> Result<(u16, u16, u16)> {
     Ok((bank, start, end))
 }
 
+// Parse a trimmed hexadecimal u16 with an optional 0x/0X prefix.
 fn parse_hex_u16(text: &str) -> Result<u16> {
     let trimmed = text.trim();
     let raw = trimmed
@@ -688,6 +724,7 @@ fn parse_hex_u16(text: &str) -> Result<u16> {
     u16::from_str_radix(raw, 16).with_context(|| format!("expected hex u16: {text}"))
 }
 
+// Render ROM details and each range inside an assembly fence; supplied path/text is inserted literally.
 fn render_disassembly_markdown(output: &DisassembleOutput) -> String {
     let mut out = String::new();
     out.push_str("# KOKURA disassembly report\n\n");
@@ -705,6 +742,7 @@ fn render_disassembly_markdown(output: &DisassembleOutput) -> String {
     out
 }
 
+// Render the same banked instruction listings with plain-text range headings.
 fn render_disassembly_text(output: &DisassembleOutput) -> String {
     let mut out = String::new();
     out.push_str("KOKURA disassembly report\n");
@@ -720,6 +758,7 @@ fn render_disassembly_text(output: &DisassembleOutput) -> String {
     out
 }
 
+// Append aligned bank/address, available hex bytes and instruction text without interpreting flow.
 fn push_disassembly_lines(out: &mut String, instructions: &[DecodedInstruction]) {
     for ins in instructions {
         let bytes = ins
@@ -735,6 +774,8 @@ fn push_disassembly_lines(out: &mut String, instructions: &[DecodedInstruction])
     }
 }
 
+// Merge toolchain metadata, map symbols and source locations, then perform static analysis.
+// Apply optional user annotations and supplied trace rows afterward before choosing the output renderer.
 fn run_decompile(args: &Args) -> Result<String> {
     let (
         rom_path,
@@ -809,6 +850,8 @@ fn run_decompile(args: &Args) -> Result<String> {
     }
 }
 
+// With a job file, rebase its declared ROM/metadata paths and omit annotation/trace overlays.
+// Without a job, use CLI paths or existing ROM sidecars for all five optional inputs.
 fn resolve_decompile_inputs(
     args: &Args,
 ) -> Result<(
@@ -870,6 +913,8 @@ fn resolve_decompile_inputs(
     }
 }
 
+// Present report notes, ranges and per-function candidate/trace detail with pseudocode
+// and disassembly fences. This is a textual view, not the complete serialized report.
 fn render_decompile_markdown(report: &DecompileReport) -> String {
     let mut out = String::new();
     out.push_str("# KOKURA decompile report\n\n");
@@ -1065,6 +1110,8 @@ fn render_decompile_markdown(report: &DecompileReport) -> String {
     out
 }
 
+// Present compact per-function names, inferred hints and listings; global notes/data
+// ranges and several detailed JSON fields are not included in this format.
 fn render_decompile_text(report: &DecompileReport) -> String {
     let mut out = String::new();
     out.push_str("KOKURA decompile report\n");
@@ -1211,6 +1258,9 @@ fn render_decompile_text(report: &DecompileReport) -> String {
     out
 }
 
+// Combine CLI options with a loaded job, validate debugger/watch/replay settings and
+// fill missing metadata paths from ROM sidecars. Most execution fields come from the job
+// when present; hardware, observation and selected alias overrides still come from CLI options.
 fn execute_args(args: &Args) -> Result<OutputEnvelope> {
     let forced_mode = match args.hardware {
         HardwareArg::Auto => None,
@@ -1350,6 +1400,7 @@ fn execute_args(args: &Args) -> Result<OutputEnvelope> {
             args.break_on_diagnostic.clone(),
         )
     };
+    // The resume-state CLI alias overrides even a job-specified load state; it is not rebased to the job directory here.
     let load_state = args.resume_state.clone().or(load_state);
 
     let symbols_path = symbols_path.or_else(|| detect_sidecar_path(&rom_path, "map"));
@@ -1409,6 +1460,7 @@ fn execute_args(args: &Args) -> Result<OutputEnvelope> {
 }
 
 #[derive(Debug, Clone)]
+// Keep normalized per-machine inputs and output destinations separate from topology ordering.
 struct LoadedLinkSession {
     name: Option<String>,
     slot: Option<u8>,
@@ -1444,6 +1496,7 @@ struct SessionInputProgram {
 }
 
 impl SessionInputProgram {
+    // Parse the fallback button mask and optional frame-counted sequence, starting at its first entry.
     fn from_session(session: &LoadedLinkSession) -> Result<Self> {
         let fallback_mask = parse_input_mask(session.input.as_deref().unwrap_or(""))?;
         let sequence = session
@@ -1461,6 +1514,8 @@ impl SessionInputProgram {
         })
     }
 
+    // Return one frame's mask and advance a finished sequence entry, then use fallback
+    // input once exhausted. A zero-duration entry still returns its mask for one call.
     fn next_mask(&mut self) -> u8 {
         if let Some((mask, _)) = self.sequence.get(self.cursor).copied() {
             let out = mask;
@@ -1482,6 +1537,8 @@ impl SessionInputProgram {
     }
 }
 
+// Load a link job, rebase its declared paths against the job directory and return both
+// the executed result and its optional report destination.
 fn execute_link_job_path(path: &str) -> Result<(LinkOutputEnvelope, Option<String>)> {
     let mut spec = load_link_job_file(path)?;
     let base = Path::new(path)
@@ -1495,6 +1552,8 @@ fn execute_link_job_path(path: &str) -> Result<(LinkOutputEnvelope, Option<Strin
     Ok((output, dump_report))
 }
 
+// Require a topology and at least two inline sessions, resolving their paths against
+// the current directory before running the link job.
 fn execute_inline_link_args(args: &Args) -> Result<LinkOutputEnvelope> {
     let topology_label = args
         .link_topology
@@ -1520,6 +1579,8 @@ fn execute_inline_link_args(args: &Args) -> Result<LinkOutputEnvelope> {
     })
 }
 
+// Parse pipe-separated key=value entries, rebasing file paths and accumulating watch
+// windows. Repeated scalar keys use the last value; literal pipes are not escaped by this parser.
 fn parse_inline_link_session_spec(spec: &str, base: &Path) -> Result<LoadedLinkSession> {
     let mut name = None;
     let mut slot = None;
@@ -1601,10 +1662,13 @@ fn parse_inline_link_session_spec(spec: &str, base: &Path) -> Result<LoadedLinkS
     })
 }
 
+// Normalize trimmed ASCII case and hyphens so supported inline keys can use either spelling.
 fn normalize_inline_link_session_key(key: &str) -> String {
     key.trim().to_ascii_lowercase().replace('-', "_")
 }
 
+// Require at least two sessions and validate each watch/debugger/replay configuration.
+// Topology-specific counts and slot continuity are checked later when ordering the runner.
 fn normalize_link_job_spec(mut spec: LinkJobSpec) -> Result<LoadedLinkJob> {
     if spec.sessions.len() < 2 {
         bail!("link job requires at least 2 sessions");
@@ -1649,6 +1713,9 @@ fn normalize_link_job_spec(mut spec: LinkJobSpec) -> Result<LoadedLinkJob> {
     })
 }
 
+// Build ordered machines and input programs, validate/attach the runner with a zero-frame
+// call, then advance one requested frame at a time. Stop on the runner stop/unsupported result
+// and save per-session state/report data even when the requested duration was not completed.
 fn execute_loaded_link_job(job: LoadedLinkJob) -> Result<LinkOutputEnvelope> {
     let (ordered_sessions, topology, session_order_note) = build_link_runner_layout(&job)?;
     let mut sessions = ordered_sessions
@@ -1661,6 +1728,7 @@ fn execute_loaded_link_job(job: LoadedLinkJob) -> Result<LinkOutputEnvelope> {
         .collect::<Result<Vec<_>>>()?;
     let runner = TimingAwareLinkRunner::new(topology);
 
+    // Zero-frame execution still validates topology and attaches serial handling before the frame loop.
     let mut summary = {
         let mut refs: Vec<&mut DebugSession> = sessions.iter_mut().collect();
         runner.run_frames(&mut refs, 0)?
@@ -1716,6 +1784,8 @@ fn execute_loaded_link_job(job: LoadedLinkJob) -> Result<LinkOutputEnvelope> {
     })
 }
 
+// Load a ROM in automatic hardware mode and validate any saved-state header before
+// restoring it. Apply audio capacity, merged metadata, watch, stop and replay configuration.
 fn build_link_debug_session(config: &LoadedLinkSession) -> Result<DebugSession> {
     let rom = fs::read(Path::new(&config.rom_path))
         .with_context(|| format!("failed to read ROM: {}", config.rom_path))?;
@@ -1795,6 +1865,8 @@ fn build_link_debug_session(config: &LoadedLinkSession) -> Result<DebugSession> 
     Ok(session)
 }
 
+// Keep pair wire order or sort adapter sessions into contiguous slots. The selected-peer
+// adapter clamps its initial peer into the available range; DMG-07 uses all ordered ports.
 fn build_link_runner_layout(
     job: &LoadedLinkJob,
 ) -> Result<(Vec<LoadedLinkSession>, LinkTopology, String)> {
@@ -1846,6 +1918,8 @@ fn build_link_runner_layout(
     }
 }
 
+// Default missing slots to input positions, sort, then reject duplicates or gaps
+// by requiring exact slots zero through session-count minus one.
 fn order_contiguous_link_sessions(
     sessions: &[LoadedLinkSession],
     topology: &str,
@@ -1874,6 +1948,7 @@ fn order_contiguous_link_sessions(
     Ok(ordered.into_iter().map(|(_, session)| session).collect())
 }
 
+// Accept supported topology aliases ignoring surrounding whitespace and ASCII case.
 fn normalize_link_topology_label(label: &str) -> Result<String> {
     let normalized = label.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -1887,6 +1962,8 @@ fn normalize_link_topology_label(label: &str) -> Result<String> {
 }
 
 #[derive(Debug, Clone)]
+// Carry execution configuration after CLI/job precedence and path resolution; some diagnostic
+// configuration fields are retained but not applied by the current executor.
 struct LoadedJob {
     rom_path: String,
     forced_mode: Option<HardwareMode>,
@@ -1936,6 +2013,9 @@ struct LoadedJob {
     break_on_diagnostic: Vec<String>,
 }
 
+// Build the session and execute explicit stages, an input sequence or a simple/observed
+// run in that priority order. Save requested state/media, compare or export replay data,
+// and assemble diagnostics and the single/staged report after execution.
 fn execute_loaded_job(job: LoadedJob) -> Result<OutputEnvelope> {
     let mut session = build_job_debug_session(&job)?;
     if job.emit_diagnostics.is_some()
@@ -1944,6 +2024,8 @@ fn execute_loaded_job(job: LoadedJob) -> Result<OutputEnvelope> {
     {
         session.machine.set_diagnostic_events_enabled(true);
     }
+    // Native diagnostic aggregation is enabled for JSONL, bundles or diagnostic filters,
+    // not solely by diagnostic PNG/snapshot destinations.
     let requested_watch_baseline_mode = parse_watch_baseline_mode_arg(job.watch_baseline_mode);
 
     if job.screenshot_frames.is_some() && job.screenshot_path.is_none() {
@@ -2007,6 +2089,8 @@ fn execute_loaded_job(job: LoadedJob) -> Result<OutputEnvelope> {
             .set_watch_baseline_mode(requested_watch_baseline_mode, None)
             .map_err(anyhow::Error::msg)?;
     }
+    // Explicit stages take precedence over input sequences; only the simple-run branch
+    // below invokes the observation-trigger engine.
     let mut stage_reports = Vec::new();
     let mut previous_report: Option<DebugReport> = None;
     if !job.stages.is_empty() {
@@ -2046,6 +2130,7 @@ fn execute_loaded_job(job: LoadedJob) -> Result<OutputEnvelope> {
             let diff_severity = classify_diff_severity(diff_score).to_string();
             let snapshot_suggestions = build_snapshot_suggestions(&report, &diff_summary);
             previous_report = Some(report.clone());
+            // A conditional snapshot path can be selected here again and overwritten with the final stage state.
             let save_path = if let Some(path) =
                 stage.save_state.clone().or(conditional_save).or_else(|| {
                     job.autosave_prefix
@@ -2171,6 +2256,8 @@ fn execute_loaded_job(job: LoadedJob) -> Result<OutputEnvelope> {
         fs::write(path, serde_json::to_string_pretty(&tape)?)
             .with_context(|| format!("failed to write replay tape: {}", path))?;
     }
+    // This is a final-report match for artifact capture, not an instruction-level stop.
+    // With nonempty filters, any final diagnostic also enters the capture path below.
     let diagnostic_break_matched = !job.break_on_diagnostic.is_empty()
         && diagnostic_break_matches(&report, &job.break_on_diagnostic);
     if diagnostic_break_matched
@@ -2194,6 +2281,7 @@ fn execute_loaded_job(job: LoadedJob) -> Result<OutputEnvelope> {
             stage_reports,
         }
     };
+    // These diagnostic pack/rule/limit fields currently have no execution effect in this function.
     let _ = (
         &job.job_base,
         &job.diagnostic_pack,
@@ -2203,6 +2291,8 @@ fn execute_loaded_job(job: LoadedJob) -> Result<OutputEnvelope> {
     Ok(output)
 }
 
+// Load the selected hardware mode, validate and restore an optional state, then apply
+// audio capacity and merged symbol/build metadata before watch/stop/replay setup.
 fn build_job_debug_session(job: &LoadedJob) -> Result<Box<DebugSession>> {
     let rom = fs::read(Path::new(&job.rom_path))
         .with_context(|| format!("failed to read ROM: {}", job.rom_path))?;
@@ -2271,6 +2361,9 @@ fn build_job_debug_session(job: &LoadedJob) -> Result<Box<DebugSession>> {
     Ok(session)
 }
 
+// Run enabled job cases sequentially with job-relative paths. Disabled or missing-job
+// cases are skipped; execution errors become failed rows, while evaluation errors propagate
+// and abort the matrix. The result carries pass/fail counts independently of CLI exit status.
 fn run_regression_matrix(matrix_path: &str) -> Result<RegressionMatrixOutput> {
     let matrix = load_regression_matrix(matrix_path)?;
     let matrix_file = Path::new(matrix_path);
@@ -2283,6 +2376,7 @@ fn run_regression_matrix(matrix_path: &str) -> Result<RegressionMatrixOutput> {
 
     for case in matrix.cases {
         let enabled = case.enabled.unwrap_or(true);
+        // Skip without executing; placeholder metric booleans in this row are not passing-test evidence.
         if !enabled {
             skipped_cases += 1;
             results.push(RegressionCaseResult {
@@ -2396,6 +2490,8 @@ fn run_regression_matrix(matrix_path: &str) -> Result<RegressionMatrixOutput> {
             continue;
         }
 
+        // Construct a job-only CLI invocation with observation, media and replay override fields unset.
+        // The referenced job can still request its own outputs.
         let args = Args {
             rom: None,
             hardware: HardwareArg::Auto,
@@ -2474,6 +2570,7 @@ fn run_regression_matrix(matrix_path: &str) -> Result<RegressionMatrixOutput> {
         let outcome = execute_args(&args);
         match outcome {
             Ok(output) => {
+                // An invalid selected stage propagates here, rather than becoming the execution-error row below.
                 let result = evaluate_regression_case(case, job_path, output)?;
                 if result.passed {
                     passed_cases += 1;
@@ -2555,6 +2652,9 @@ fn run_regression_matrix(matrix_path: &str) -> Result<RegressionMatrixOutput> {
     })
 }
 
+// Choose the requested or last stage and check expected presence plus numeric floors.
+// Extra diagnostics/opcodes/events/watch changes are reported but do not fail the case.
+// Suggestion expectations for another stage are omitted from both matched and missing lists.
 fn evaluate_regression_case(
     case: RegressionCase,
     job_path: PathBuf,
@@ -2598,6 +2698,7 @@ fn evaluate_regression_case(
             })?;
             (stage_reports.len(), StageView::Staged(stage))
         }
+        // A requested stage index is not validated for a single report; its effective index is zero.
         OutputEnvelope::Single(report) => (1, StageView::Single(report)),
     };
 
@@ -2770,6 +2871,7 @@ fn evaluate_regression_case(
         .as_ref()
         .map(|expected| expected.eq_ignore_ascii_case(&actual_severity))
         .unwrap_or(true);
+    // Only missing expectations and failed floors affect this conjunction; extra observed items do not.
     let passed = severity_ok
         && bank_switch_floor_passed
         && far_call_floor_passed
@@ -2844,6 +2946,7 @@ enum StageView<'a> {
 }
 
 impl<'a> StageView<'a> {
+    // Borrow the underlying report from either a stage wrapper or a single-run result.
     fn report(&self) -> &'a DebugReport {
         match self {
             StageView::Staged(stage) => &stage.report,
@@ -2851,6 +2954,7 @@ impl<'a> StageView<'a> {
         }
     }
 
+    // Use the recorded stage index, or zero for a single-run report.
     fn stage_index(&self) -> usize {
         match self {
             StageView::Staged(stage) => stage.stage_index,
@@ -2858,6 +2962,7 @@ impl<'a> StageView<'a> {
         }
     }
 
+    // Use the stored stage severity; for a single report, score its current delta summary on demand.
     fn diff_severity(&self) -> &str {
         match self {
             StageView::Staged(stage) => &stage.diff_severity,
@@ -2868,6 +2973,7 @@ impl<'a> StageView<'a> {
         }
     }
 
+    // Build unique kind/value labels from stored stage suggestions or suggestions inferred for a single report.
     fn suggestion_labels(&self) -> BTreeSet<String> {
         match self {
             StageView::Staged(stage) => stage
@@ -2884,6 +2990,7 @@ impl<'a> StageView<'a> {
         }
     }
 
+    // Collect exact debug-formatted diagnostic code names into a presence set.
     fn diagnostic_codes(&self) -> BTreeSet<String> {
         self.report()
             .diagnostics
@@ -2892,6 +2999,7 @@ impl<'a> StageView<'a> {
             .collect()
     }
 
+    // Normalize recorded unsupported bytes as unique two-digit lowercase hexadecimal values.
     fn unsupported_opcode_hexes(&self) -> BTreeSet<String> {
         self.report()
             .unsupported_opcodes
@@ -2900,6 +3008,7 @@ impl<'a> StageView<'a> {
             .collect()
     }
 
+    // Collect normalized types from retained report events, not a separate lifetime event counter.
     fn event_types(&self) -> BTreeSet<String> {
         self.report()
             .events
@@ -2908,47 +3017,58 @@ impl<'a> StageView<'a> {
             .collect()
     }
 
+    // Read the report summary's bank-switch count.
     fn bank_switch_count(&self) -> u64 {
         self.report().summary.bank_switch_count
     }
 
+    // Read the report summary's far-call observation count.
     fn far_call_count(&self) -> u64 {
         self.report().summary.far_call_count
     }
 
+    // Read the report summary's recognized-intrinsic count.
     fn intrinsic_count(&self) -> u64 {
         self.report().summary.intrinsic_count
     }
 
+    // Use OAM DMA starts as the OAM-transfer metric.
     fn oam_dma_count(&self) -> u64 {
         self.report().summary.oam_dma_start_count
     }
 
+    // Use the summary's transferred HDMA block count.
     fn hdma_block_count(&self) -> u64 {
         self.report().summary.hdma_block_count
     }
 
+    // Combine OAM and HDMA completion counts for the matrix floor check.
     fn dma_complete_count(&self) -> u64 {
         self.report().summary.oam_dma_complete_count + self.report().summary.hdma_complete_count
     }
 
+    // Combine reported GDMA and HDMA stall estimates; this is not a measured host-time metric.
     fn dma_stall_cycles(&self) -> u64 {
         self.report().summary.gdma_stall_cycles_estimate
             + self.report().summary.hdma_stall_cycles_estimate
     }
 
+    // Read the summary's heuristic bank-thrashing score.
     fn bank_thrash_score(&self) -> u32 {
         self.report().summary.bank_thrash_score
     }
 
+    // Read the summary's timer-interrupt observation count.
     fn timer_interrupt_count(&self) -> u64 {
         self.report().summary.timer_interrupt_count
     }
 
+    // Read the summary's VBlank count.
     fn vblank_count(&self) -> u64 {
         self.report().summary.vblank_count
     }
 
+    // Count retained event objects by normalized type; trace retention limits can affect these totals.
     fn event_type_counts(&self) -> BTreeMap<String, u64> {
         let mut counts = BTreeMap::new();
         for event in &self.report().events {
@@ -2958,6 +3078,7 @@ impl<'a> StageView<'a> {
         counts
     }
 
+    // Select watches currently marked changed and normalize their names for expectation matching.
     fn changed_watch_names(&self) -> BTreeSet<String> {
         self.report()
             .watched_memory
@@ -2969,6 +3090,7 @@ impl<'a> StageView<'a> {
     }
 }
 
+// Apply a parsed stage button mask, releasing all buttons when the stage omits input.
 fn apply_stage_input(session: &mut DebugSession, input: Option<&str>) -> Result<()> {
     let mask = match input {
         Some(spec) => parse_input_mask(spec)?,
@@ -2978,6 +3100,7 @@ fn apply_stage_input(session: &mut DebugSession, input: Option<&str>) -> Result<
     Ok(())
 }
 
+// Format every supplied preview byte as two-digit uppercase hexadecimal.
 fn format_watch_preview(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -2986,6 +3109,8 @@ fn format_watch_preview(bytes: &[u8]) -> String {
         .join(" ")
 }
 
+// Prefer up to four explicit changed-byte entries with a truncation marker, otherwise
+// compare available current/baseline previews. Changes outside a preview can have no detail here.
 fn summarize_watch_diff_preview(watch: &kokura_debug::MemoryWatchResult) -> Option<String> {
     if !watch.diff_preview.is_empty() {
         let mut parts = watch
@@ -3012,6 +3137,7 @@ fn summarize_watch_diff_preview(watch: &kokura_debug::MemoryWatchResult) -> Opti
     None
 }
 
+// Describe differing nonempty previews between two reports; equality does not prove whole-window equality.
 fn summarize_watch_transition(
     previous_watch: &kokura_debug::MemoryWatchResult,
     current_watch: &kokura_debug::MemoryWatchResult,
@@ -3029,6 +3155,9 @@ fn summarize_watch_transition(
     ))
 }
 
+// Compare selected hashes/locations with the previous report, then append current
+// watch/activity observations. Stage wording uses the supplied report counters without
+// subtracting previous totals, so its time scope depends on how the session produced them.
 fn build_stage_diff(previous: Option<&DebugReport>, current: &DebugReport) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(prev) = previous {
@@ -3131,6 +3260,7 @@ fn build_stage_diff(previous: Option<&DebugReport>, current: &DebugReport) -> Ve
             );
         }
     }
+    // This fallback is inserted before later LCD/DMA activity notes, so both can appear in one result.
     if out.is_empty() {
         out.push("No major stage-to-stage delta detected".to_string());
     }
@@ -3190,6 +3320,8 @@ fn build_stage_diff(previous: Option<&DebugReport>, current: &DebugReport) -> Ve
     out
 }
 
+// Weight summary length and selected activity/diagnostic counters into a heuristic
+// attention score. Normal rendering or bank activity can raise it without establishing a fault.
 fn compute_diff_score(report: &DebugReport, diff_summary: &[String]) -> u32 {
     let mut score = (diff_summary.len() as u32).saturating_mul(4);
     score += report.diagnostics.len() as u32;
@@ -3220,6 +3352,7 @@ fn compute_diff_score(report: &DebugReport, diff_summary: &[String]) -> u32 {
     score
 }
 
+// Map the attention score to five fixed labels; these are not calibrated error probabilities.
 fn classify_diff_severity(score: u32) -> &'static str {
     match score {
         0..=4 => "none",
@@ -3230,6 +3363,8 @@ fn classify_diff_severity(score: u32) -> &'static str {
     }
 }
 
+// Propose event/symbol/source/frame capture anchors from current report observations.
+// No snapshot is taken by this helper, and suggestions are not evidence of completed verification.
 fn build_snapshot_suggestions(
     report: &DebugReport,
     diff_summary: &[String],
@@ -3343,6 +3478,7 @@ fn build_snapshot_suggestions(
     dedup_suggestions(out)
 }
 
+// Keep the first proposal for each kind/value label, preserving its original reason and order.
 fn dedup_suggestions(suggestions: Vec<SnapshotSuggestion>) -> Vec<SnapshotSuggestion> {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
@@ -3355,6 +3491,8 @@ fn dedup_suggestions(suggestions: Vec<SnapshotSuggestion>) -> Vec<SnapshotSugges
     out
 }
 
+// Enable instruction-level observation for triggers, baseline captures or timeline output.
+// Diagnostic filters and media destinations alone do not enable this mode.
 fn observation_mode_enabled(job: &LoadedJob) -> bool {
     !job.snapshot_at.is_empty()
         || !job.run_until.is_empty()
@@ -3363,6 +3501,7 @@ fn observation_mode_enabled(job: &LoadedJob) -> bool {
         || job.timeline_out.is_some()
 }
 
+// Map the CLI baseline enum directly to the debugger baseline mode.
 fn parse_watch_baseline_mode_arg(arg: WatchBaselineModeArg) -> MemoryWatchBaselineMode {
     match arg {
         WatchBaselineModeArg::Initial => MemoryWatchBaselineMode::Initial,
@@ -3371,6 +3510,8 @@ fn parse_watch_baseline_mode_arg(arg: WatchBaselineModeArg) -> MemoryWatchBaseli
     }
 }
 
+// Split a comma list into unique trimmed lowercase tokens; reject an explicitly empty
+// list but do not validate token names against available report fields.
 fn parse_csv_filter_set(spec: Option<&str>) -> Result<Option<BTreeSet<String>>> {
     let Some(spec) = spec else {
         return Ok(None);
@@ -3388,6 +3529,7 @@ fn parse_csv_filter_set(spec: Option<&str>) -> Result<Option<BTreeSet<String>>> 
     Ok(Some(out))
 }
 
+// Use report-minimal as the section-list override and parse optional watch-field groups.
 fn build_output_filter_options(job: &LoadedJob) -> Result<OutputFilterOptions> {
     let report_sections = if let Some(minimal) = job.report_minimal.as_deref() {
         parse_csv_filter_set(Some(minimal))?
@@ -3401,6 +3543,7 @@ fn build_output_filter_options(job: &LoadedJob) -> Result<OutputFilterOptions> {
     })
 }
 
+// Serialize the full ordinary/staged result, then filter the JSON representation before pretty-printing.
 fn render_output_json(output: &OutputEnvelope, args: &Args) -> Result<String> {
     let filters = OutputFilterOptions {
         report_sections: if let Some(minimal) = args.report_minimal.as_deref() {
@@ -3415,6 +3558,7 @@ fn render_output_json(output: &OutputEnvelope, args: &Args) -> Result<String> {
     Ok(serde_json::to_string_pretty(&value)?)
 }
 
+// Serialize the full link envelope, then filter nested session reports before pretty-printing.
 fn render_link_output_json(output: &LinkOutputEnvelope, args: &Args) -> Result<String> {
     let filters = OutputFilterOptions {
         report_sections: if let Some(minimal) = args.report_minimal.as_deref() {
@@ -3429,6 +3573,8 @@ fn render_link_output_json(output: &LinkOutputEnvelope, args: &Args) -> Result<S
     Ok(serde_json::to_string_pretty(&value)?)
 }
 
+// Recognize a report by meta/cpu/video keys or visit known staged/link wrapper locations.
+// This traversal does not recursively filter arbitrary unrelated JSON objects.
 fn filter_output_value(value: &mut JsonValue, filters: &OutputFilterOptions) {
     match value {
         JsonValue::Object(map) => {
@@ -3461,8 +3607,11 @@ fn filter_output_value(value: &mut JsonValue, filters: &OutputFilterOptions) {
     }
 }
 
+// Retain schema/meta plus selected top-level sections, then optionally prune fields
+// inside any remaining watched-memory array.
 fn filter_debug_report_value(map: &mut JsonMap<String, JsonValue>, filters: &OutputFilterOptions) {
     if let Some(sections) = filters.report_sections.as_ref() {
+        // Unlike watch-field groups, section filters have no special all token; schema and meta always survive.
         let keep = |key: &str| {
             key == "schema_version" || key == "meta" || sections.contains(&key.to_ascii_lowercase())
         };
@@ -3487,6 +3636,7 @@ fn filter_debug_report_value(map: &mut JsonMap<String, JsonValue>, filters: &Out
     }
 }
 
+// Retain watch identity and requested field groups. Unrecognized fields are kept for compatibility.
 fn filter_watch_value(map: &mut JsonMap<String, JsonValue>, watch_fields: &BTreeSet<String>) {
     let keep_all = watch_fields.contains("all");
     let keep_key = |key: &str| match key {
@@ -3511,6 +3661,8 @@ fn filter_watch_value(map: &mut JsonMap<String, JsonValue>, watch_fields: &BTree
     }
 }
 
+// Parse condition=>path, or derive a numbered state filename from the ROM stem.
+// The generated filename is relative to the working directory, not the ROM directory.
 fn parse_snapshot_request(spec: &str, index: usize, rom_path: &str) -> Result<SnapshotRequest> {
     let (condition_text, save_path) = if let Some((condition, path)) = spec.split_once("=>") {
         (condition.trim(), Some(path.trim().to_string()))
@@ -3532,6 +3684,7 @@ fn parse_snapshot_request(spec: &str, index: usize, rom_path: &str) -> Result<Sn
     })
 }
 
+// Require name=>condition and parse the condition; name validation is deferred to baseline capture.
 fn parse_baseline_capture_request(spec: &str) -> Result<BaselineCaptureRequest> {
     let (name, condition) = spec
         .split_once("=>")
@@ -3542,6 +3695,7 @@ fn parse_baseline_capture_request(spec: &str) -> Result<BaselineCaptureRequest> 
     })
 }
 
+// Assign a numbered trace label and parse its observation condition.
 fn parse_trace_point_request(spec: &str, index: usize) -> Result<TracePointRequest> {
     Ok(TracePointRequest {
         label: format!("trace_{:02}", index + 1),
@@ -3549,6 +3703,8 @@ fn parse_trace_point_request(spec: &str, index: usize) -> Result<TracePointReque
     })
 }
 
+// Parse an AND-only sequence of supported coordinate, text and basis terms.
+// Ignore empty separators, reject unknown keys, and expand VBlank shorthand into event-basis terms.
 fn parse_observation_condition(spec: &str) -> Result<ObservationCondition> {
     let raw = spec.trim();
     if raw.is_empty() {
@@ -3596,6 +3752,7 @@ fn parse_observation_condition(spec: &str) -> Result<ObservationCondition> {
             )),
             "pc" => terms.push(ObservationTerm::Pc(parse_u16_value(value)?)),
             "bank" => terms.push(ObservationTerm::Bank(parse_u16_value(value)?)),
+            // Numeric observation terms use parse_u16_value rules, which differ from the always-hex disassembly range parser.
             "bank_pc" => {
                 let (bank, pc) = value
                     .split_once(':')
@@ -3631,6 +3788,7 @@ fn parse_observation_condition(spec: &str) -> Result<ObservationCondition> {
     Ok(ObservationCondition { terms })
 }
 
+// Format source path and line, appending the column only when available.
 fn observation_source_label(snapshot: &kokura_debug::ObservationSnapshot) -> Option<String> {
     snapshot.source.as_ref().map(|source| match source.column {
         Some(column) => format!("{}:{}:{}", source.path, source.line, column),
@@ -3638,6 +3796,8 @@ fn observation_source_label(snapshot: &kokura_debug::ObservationSnapshot) -> Opt
     })
 }
 
+// Count new events by normalized type and render the first four types in sorted order,
+// not necessarily the four most frequent types.
 fn observation_event_summary(new_events: &[DebugEvent]) -> String {
     if new_events.is_empty() {
         return String::new();
@@ -3656,6 +3816,8 @@ fn observation_event_summary(new_events: &[DebugEvent]) -> String {
         .join(" | ")
 }
 
+// Clear unselected watch data in copied typed results while preserving their schema
+// and identity. Zero/false/empty placeholders here mean omitted output, not measured values.
 fn filter_watch_results(
     watched_memory: Vec<MemoryWatchResult>,
     watch_fields: Option<&BTreeSet<String>>,
@@ -3703,6 +3865,9 @@ fn filter_watch_results(
         .collect()
 }
 
+// Sample current registers/flags, six words from raw memory at SP through SP+10,
+// and filtered watch results. Stack samples bypass CPU bus/device access rules and are
+// observations of memory words, not proven function arguments.
 fn build_timeline_row(
     session: &DebugSession,
     basis: ObservationBasis,
@@ -3714,6 +3879,7 @@ fn build_timeline_row(
     let source = observation_source_label(&snapshot);
     let watched_memory =
         filter_watch_results(session.watched_memory_results_snapshot(), watch_fields);
+    // The summary is built after filtering: removing activity fields also suppresses changed-watch labels.
     let watch_summary = watched_memory
         .iter()
         .filter(|watch| watch.changed)
@@ -3799,6 +3965,8 @@ fn build_timeline_row(
     }
 }
 
+// Require every term to match the current snapshot and newly supplied events. FrameEnd
+// uses completed frames; other bases use active frame. Symbol/source matching is case-sensitive.
 fn condition_matches(
     session: &DebugSession,
     condition: &ObservationCondition,
@@ -3831,6 +3999,8 @@ fn condition_matches(
     })
 }
 
+// Advance capture-relative frame numbering, drain all queued PCM and retain only
+// selected media ranges. Video retains the scalar framebuffer; screenshots also keep RGB555.
 fn apply_capture_state_for_frame(capture: &mut OutputCaptureState, session: &mut DebugSession) {
     capture.executed_frames = capture.executed_frames.saturating_add(1);
     let absolute_frame = capture.executed_frames;
@@ -3865,6 +4035,9 @@ fn apply_capture_state_for_frame(capture: &mut OutputCaptureState, session: &mut
     }
 }
 
+// Step with pre-step, post-step/event and completed-frame trigger checks, saving
+// matching states and timeline rows until a stop, run-until match or frame budget.
+// Requests are not one-shot; repeated matches can overwrite a snapshot path.
 fn run_observation_session(
     session: &mut DebugSession,
     job: &LoadedJob,
@@ -3911,6 +4084,7 @@ fn run_observation_session(
     let target_completed_frames = start_completed_frames.saturating_add(job.run_frames);
 
     loop {
+        // This FrameStart pass runs before every debug step, not only when a new physical frame starts.
         let frame_start_events: [DebugEvent; 0] = [];
         for request in &baseline_requests {
             if condition_matches(
@@ -3988,6 +4162,7 @@ fn run_observation_session(
         }
 
         let outcome = session.run_debug_step().map_err(anyhow::Error::from)?;
+        // The cursor assumes an append-only event vector with no truncation below its previous length.
         let new_events = session.event_log[event_cursor..].to_vec();
         event_cursor = session.event_log.len();
 
@@ -4182,6 +4357,7 @@ fn run_observation_session(
             break;
         }
 
+        // Budget is checked after stepping, so zero requested frames can still execute one step unless a pre-step condition stops it.
         if session.machine.clocks.frames >= target_completed_frames {
             break;
         }
@@ -4193,6 +4369,8 @@ fn run_observation_session(
     Ok(())
 }
 
+// Run through the debugger frame callback, accumulating requested media by local frame
+// number. Drain queued audio at every callback even when audio capture is disabled.
 fn run_session_frames(
     session: &mut DebugSession,
     frames: u64,
@@ -4251,6 +4429,8 @@ fn run_session_frames(
     }
 }
 
+// Run one-frame chunks and evaluate stage triggers afterward, saving each distinct
+// path at most once. Conditions use the FrameEnd basis even if execution stopped mid-frame.
 fn run_stage_with_snapshot_list(
     session: &mut DebugSession,
     idx: usize,
@@ -4322,6 +4502,7 @@ fn run_stage_with_snapshot_list(
             }
         }
         cursor = session.event_log.len();
+        // This stage loop checks unsupported-opcode halt here, but not a debugger stop reason.
         if session.halted_on_unsupported_opcode() {
             break;
         }
@@ -4329,6 +4510,7 @@ fn run_stage_with_snapshot_list(
     Ok(saved)
 }
 
+// Execute all stage capture triggers and return only the last saved path to the outer stage executor.
 fn run_stage_with_snapshots(
     session: &mut DebugSession,
     idx: usize,
@@ -4343,6 +4525,8 @@ fn run_stage_with_snapshots(
     )
 }
 
+// Parse recognized recommendation prefixes directly into validated stop specifications.
+// Unknown prefixes are ignored; no recommendation is executed as a shell command.
 fn parse_recommended_stop_specs(specs: &[String]) -> Result<StopConditionSet> {
     let mut out = StopConditionSet::default();
     for spec in specs {
@@ -4362,6 +4546,7 @@ fn parse_recommended_stop_specs(specs: &[String]) -> Result<StopConditionSet> {
     out.validate().map_err(|err| anyhow!(err))
 }
 
+// Parse recognized watch-window recommendations and deduplicate normalized name/address/size triples.
 fn parse_recommended_watch_windows(specs: &[String]) -> Result<Vec<MemoryWatchSpec>> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
@@ -4378,6 +4563,8 @@ fn parse_recommended_watch_windows(specs: &[String]) -> Result<Vec<MemoryWatchSp
     Ok(out)
 }
 
+// Plan relative first/mismatch/last frame captures plus relevant event triggers
+// inside a proposed replay window. Optional filenames are proposals until follow-up actually runs.
 fn build_replay_mismatch_snapshot_plan(
     mismatch: &ReplayReferenceMismatchReport,
     helper: &ReplayDivergenceHelperReport,
@@ -4463,6 +4650,9 @@ fn build_replay_mismatch_snapshot_plan(
     }
 }
 
+// Attempt rewind into the retained window, merge recommended watches/stops/replay
+// settings and execute snapshot triggers. This mutates the supplied live session and does
+// not restore its original position/configuration afterward; returned frame counts are requested bounds.
 fn run_replay_mismatch_snapshot_followup(
     session: &mut DebugSession,
     plan: &ReplayConditionalSnapshotPlanReport,
@@ -4487,6 +4677,7 @@ fn run_replay_mismatch_snapshot_followup(
         .saturating_sub(effective_start)
         .saturating_add(1)
         .max(1);
+    // If the requested start lies after current time, this becomes zero and no forward seek is performed.
     let frames_back = current_frame.saturating_sub(effective_start);
 
     let rewound = if frames_back == 0 {
@@ -4525,6 +4716,7 @@ fn run_replay_mismatch_snapshot_followup(
         .set_stop_conditions(merged_stop_conditions)
         .map_err(|err| anyhow!("failed to apply replay mismatch stop overlay: {err}"))?;
 
+    // Keep the follow-up checkpoint window at least as large as the planned interval; original settings are not restored.
     let replay_overlay = ReplayControlSet {
         enabled: true,
         checkpoint_interval_frames: 1,
@@ -4604,6 +4796,8 @@ fn run_replay_mismatch_snapshot_followup(
     })
 }
 
+// Match event-specific aliases and selected payload text ignoring ASCII case. Most
+// branches test whether the filter contains a keyword; this is broader than exact event-type matching.
 fn event_matches(event: &DebugEvent, needle: &str) -> bool {
     let n = needle.to_ascii_lowercase();
     match event {
@@ -4767,6 +4961,7 @@ fn event_matches(event: &DebugEvent, needle: &str) -> bool {
         DebugEvent::JoypadInterrupt { .. } => {
             n.contains("joypad_irq") || n.contains("joypad_interrupt")
         }
+        // Any filter containing irq matches this request branch, including more specific-looking strings such as irq_service.
         DebugEvent::InterruptRequested { source, .. } => {
             n.contains("irq") || n == source.to_ascii_lowercase()
         }
@@ -4819,12 +5014,15 @@ fn event_matches(event: &DebugEvent, needle: &str) -> bool {
     }
 }
 
+// Keep ASCII letters and digits; replace every other character with an underscore for generated labels.
 fn sanitize_name(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect()
 }
 
+// Accept an entire hexadecimal byte or comma-separated button aliases and OR their bits.
+// Empty input releases every button; decimal numeric masks other than zero are not accepted.
 fn parse_input_mask(spec: &str) -> Result<u8> {
     let trimmed = spec.trim();
     if trimmed.is_empty() {
@@ -4864,6 +5062,8 @@ fn parse_input_mask(spec: &str) -> Result<u8> {
     Ok(mask)
 }
 
+// Parse semicolon-separated INPUT:FRAMES entries in order. Empty entries are ignored
+// and zero durations are accepted; the frame substring is not separately trimmed.
 fn parse_input_sequence(spec: &str) -> Result<Vec<(u8, u64)>> {
     let mut out = Vec::new();
     for part in spec.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -4879,6 +5079,8 @@ fn parse_input_sequence(spec: &str) -> Result<Vec<(u8, u64)>> {
     Ok(out)
 }
 
+// Require exactly NAME:ADDR:SIZE, parse decimal or prefixed hexadecimal numbers,
+// then validate the name and memory range through the shared watch specification.
 fn parse_watch_window_spec(spec: &str) -> Result<MemoryWatchSpec> {
     let mut parts = spec.split(':');
     let name = parts
@@ -4905,6 +5107,7 @@ fn parse_watch_window_spec(spec: &str) -> Result<MemoryWatchSpec> {
     .map_err(|message| anyhow!(message))
 }
 
+// Validate each supplied watch in order; this helper does not deduplicate names or ranges.
 fn normalize_watch_windows(specs: Vec<MemoryWatchSpec>) -> Result<Vec<MemoryWatchSpec>> {
     specs
         .into_iter()
@@ -4912,6 +5115,8 @@ fn normalize_watch_windows(specs: Vec<MemoryWatchSpec>) -> Result<Vec<MemoryWatc
         .collect()
 }
 
+// Parse each repeated CLI stop option, then validate the combined condition set.
+// Any invalid entry rejects the configuration before execution.
 fn parse_cli_debugger_args(args: &Args) -> Result<StopConditionSet> {
     let breakpoints = args
         .breakpoints
@@ -4949,6 +5154,8 @@ fn parse_cli_debugger_args(args: &Args) -> Result<StopConditionSet> {
     .map_err(|err| anyhow!(err))
 }
 
+// Enable checkpoint recording when replay timing, retention, rewind or divergence
+// controls are supplied. Export/compare paths alone do not enable recording here.
 fn parse_cli_replay_args(args: &Args) -> Result<ReplayControlSet> {
     let enabled = args.replay_interval.is_some()
         || args.replay_max_checkpoints.is_some()
@@ -4965,6 +5172,8 @@ fn parse_cli_replay_args(args: &Args) -> Result<ReplayControlSet> {
     .map_err(|err| anyhow!(err))
 }
 
+// Parse a symbol or numeric PC with an optional @bank qualifier, then validate it.
+// The symbol:, pc: and @bank: syntax markers are case-sensitive.
 fn parse_breakpoint_spec(spec: &str) -> Result<ExecuteBreakpointSpec> {
     let trimmed = spec.trim();
     let (head, bank) = if let Some((head, bank_part)) = trimmed.split_once("@bank:") {
@@ -4998,6 +5207,7 @@ fn parse_breakpoint_spec(spec: &str) -> Result<ExecuteBreakpointSpec> {
     parsed.validate().map_err(|err| anyhow!(err))
 }
 
+// Parse an optional name@ prefix and address+size range; an omitted size watches one byte.
 fn parse_watchpoint_spec(spec: &str) -> Result<MemoryWatchpointSpec> {
     let trimmed = spec.trim();
     let (name, body) = if let Some((name, body)) = trimmed.split_once('@') {
@@ -5024,6 +5234,7 @@ fn parse_watchpoint_spec(spec: &str) -> Result<MemoryWatchpointSpec> {
         .map_err(|err| anyhow!(err))
 }
 
+// Parse an optional name@ prefix and validate the address as an MMIO write stop.
 fn parse_mmio_stop_spec(spec: &str) -> Result<MmioWriteStopSpec> {
     let trimmed = spec.trim();
     let (name, addr_token) = if let Some((name, addr)) = trimmed.split_once('@') {
@@ -5040,6 +5251,8 @@ fn parse_mmio_stop_spec(spec: &str) -> Result<MmioWriteStopSpec> {
     .map_err(|err| anyhow!(err))
 }
 
+// Parse a source, source:phase or one of the three lowercase phase-only forms.
+// Empty colon-separated components are skipped before shape validation.
 fn parse_interrupt_stop_spec(spec: &str) -> Result<InterruptStopSpec> {
     let trimmed = spec.trim();
     let mut parts = trimmed
@@ -5069,6 +5282,7 @@ fn parse_interrupt_stop_spec(spec: &str) -> Result<InterruptStopSpec> {
         .map_err(|err| anyhow!(err))
 }
 
+// Resolve case-insensitive phase aliases; reject unknown phase names instead of assuming Any.
 fn parse_interrupt_stop_phase(token: &str) -> Result<InterruptStopPhase> {
     match token.trim().to_ascii_lowercase().as_str() {
         "requested" | "request" | "req" => Ok(InterruptStopPhase::Requested),
@@ -5079,6 +5293,7 @@ fn parse_interrupt_stop_phase(token: &str) -> Result<InterruptStopPhase> {
     }
 }
 
+// Normalize the DMA event name to lowercase and validate it against supported stop events.
 fn parse_dma_stop_spec(spec: &str) -> Result<DmaStopSpec> {
     DmaStopSpec {
         event: spec.trim().to_ascii_lowercase(),
@@ -5087,6 +5302,8 @@ fn parse_dma_stop_spec(spec: &str) -> Result<DmaStopSpec> {
     .map_err(|err| anyhow!(err))
 }
 
+// Trim surrounding whitespace and parse an unsigned 16-bit decimal value, or hexadecimal
+// when explicitly prefixed by 0x/0X. Overflow and malformed values return contextual errors.
 fn parse_u16_value(token: &str) -> Result<u16> {
     let trimmed = token.trim();
     if let Some(hex) = trimmed
@@ -5101,6 +5318,8 @@ fn parse_u16_value(token: &str) -> Result<u16> {
         .with_context(|| format!("invalid decimal value: {trimmed}"))
 }
 
+// Rebase job and stage input/output paths against the job directory. Absolute paths
+// are preserved; joining does not canonicalize paths or check whether files exist.
 fn resolve_job_paths(job: &mut JobSpec, base: &Path) {
     job.rom = normalize_path(base, &job.rom).display().to_string();
     job.symbols = job
@@ -5173,6 +5392,7 @@ fn resolve_job_paths(job: &mut JobSpec, base: &Path) {
     }
 }
 
+// Rebase the linked-job report and each session asset/state path against its job directory.
 fn resolve_link_job_paths(job: &mut LinkJobSpec, base: &Path) {
     job.dump_report = job
         .dump_report
@@ -5203,30 +5423,37 @@ fn resolve_link_job_paths(job: &mut LinkJobSpec, base: &Path) {
     }
 }
 
+// Replace the ROM extension and return the sidecar only when that path is an existing file.
 fn detect_sidecar_path(rom_path: &str, extension: &str) -> Option<String> {
     let mut candidate = PathBuf::from(rom_path);
     candidate.set_extension(extension);
     candidate.is_file().then(|| candidate.display().to_string())
 }
 
+// Read UTF-8 symbol metadata and deserialize its structure with a path-specific error.
 fn load_symbol_table_json_file(path: &str) -> Result<SymbolTable> {
     let text = fs::read_to_string(path).with_context(|| format!("failed to read file: {path}"))?;
     serde_json::from_str::<SymbolTable>(&text)
         .with_context(|| format!("failed to parse SymbolTable JSON: {path}"))
 }
 
+// Read and deserialize build metadata; this does not independently verify its ROM hash.
 fn load_toolchain_build_report_file(path: &str) -> Result<ToolchainBuildReport> {
     let text = fs::read_to_string(path).with_context(|| format!("failed to read file: {path}"))?;
     serde_json::from_str::<ToolchainBuildReport>(&text)
         .with_context(|| format!("failed to parse build report JSON: {path}"))
 }
 
+// Read annotation JSON into the shared model; interpretation occurs in the decompiler.
 fn load_decompile_annotation_file(path: &str) -> Result<DecompileAnnotationFile> {
     let text = fs::read_to_string(path).with_context(|| format!("failed to read file: {path}"))?;
     serde_json::from_str::<DecompileAnnotationFile>(&text)
         .with_context(|| format!("failed to parse decompile annotation JSON: {path}"))
 }
 
+// Read nonempty JSONL rows in file order, requiring numeric PC and bank fields.
+// Optional maps retain only correctly typed values; this loader does not establish ROM identity
+// or chronological ordering, and numeric PC/bank/SP casts retain only their low 16 bits.
 fn load_decompile_trace_rows(path: &str) -> Result<Vec<DecompileTraceObservation>> {
     let text = fs::read_to_string(path).with_context(|| format!("failed to read file: {path}"))?;
     let mut rows = Vec::new();
@@ -5317,6 +5544,8 @@ fn load_decompile_trace_rows(path: &str) -> Result<Vec<DecompileTraceObservation
     Ok(rows)
 }
 
+// Wrap an existing replay report with its path and optional build-reported ROM hash.
+// No tape is produced without replay data, and the ROM is not freshly hashed here.
 fn build_replay_tape(report: &DebugReport, rom_path: &str) -> Option<ReplayTapeEnvelope> {
     let replay = report.replay.clone()?;
     Some(ReplayTapeEnvelope {
@@ -5330,12 +5559,16 @@ fn build_replay_tape(report: &DebugReport, rom_path: &str) -> Option<ReplayTapeE
     })
 }
 
+// Deserialize the replay envelope; schema compatibility and ROM identity are not checked here.
 fn load_replay_tape_file(path: &str) -> Result<ReplayTapeEnvelope> {
     let text = fs::read_to_string(path).with_context(|| format!("failed to read file: {path}"))?;
     serde_json::from_str::<ReplayTapeEnvelope>(&text)
         .with_context(|| format!("failed to parse replay tape JSON: {path}"))
 }
 
+// Locate the mismatch slice and adjacent slices by list position, then suggest a
+// frame window and diagnostic controls from observed activity. These suggestions are
+// heuristics, not evidence that a particular subsystem caused the divergence.
 fn build_divergence_focus(
     reference: &ReplayReport,
     actual: &ReplayReport,
@@ -5419,6 +5652,7 @@ fn build_divergence_focus(
                     .to_string(),
             );
         }
+        // The MMIO recommendation below stops on FF00 writes, not on the observed reads themselves.
         if slice.joypad_read_count > 0 {
             recommended_cli_stop_specs.push("--stop-on-mmio 0xFF00".to_string());
             recommended_watch_windows.push("--watch-window p1:0xFF00:0x01".to_string());
@@ -5472,6 +5706,9 @@ fn build_divergence_focus(
     })
 }
 
+// Compare checkpoints in list order and report the first checked difference, then
+// compare available slice digests unless watch-only mode is selected. A match means
+// no checked difference was found; missing recordings and absent watch digests limit coverage.
 fn compare_replay_reports(
     reference: &ReplayReport,
     actual: &ReplayReport,
@@ -5481,6 +5718,7 @@ fn compare_replay_reports(
     let mut notes = Vec::new();
     let mut first_mismatch: Option<ReplayReferenceMismatchReport> = None;
 
+    // Pair by array position, not by checkpoint identifier; ROM identity is not an input to this comparison.
     let min_checkpoint_count = reference.checkpoints.len().min(actual.checkpoints.len());
     for idx in 0..min_checkpoint_count {
         let expected = &reference.checkpoints[idx];
@@ -5512,6 +5750,7 @@ fn compare_replay_reports(
                 expected: format!("{:08X}", expected.frame_hash),
                 actual: format!("{:08X}", observed.frame_hash),
             })
+        // A zero digest on either side skips this watch comparison, even in watch-only mode.
         } else if expected.watch_digest != 0
             && observed.watch_digest != 0
             && expected.watch_digest != observed.watch_digest
@@ -5550,6 +5789,7 @@ fn compare_replay_reports(
             "Replay comparison ran in watch-only mode; checkpoint digests and slice digests were ignored."
                 .to_string(),
         );
+    // Missing slices add a coverage note but do not themselves make the reports mismatched.
     } else if reference.slices.is_empty() || actual.slices.is_empty() {
         notes.push(
             "One side does not contain replay slices; slice-level comparison was limited."
@@ -5623,6 +5863,7 @@ fn compare_replay_reports(
     }
 }
 
+// Preserve absolute paths and join relative paths to the supplied base without canonicalization.
 fn normalize_path(base: &Path, candidate: &str) -> PathBuf {
     let path = Path::new(candidate);
     if path.is_absolute() {
@@ -5632,6 +5873,7 @@ fn normalize_path(base: &Path, candidate: &str) -> PathBuf {
     }
 }
 
+// Parse one decimal frame or an inclusive start:end range, rejecting zero and reversed bounds.
 fn parse_frame_range_spec(spec: &str) -> Result<FrameRange> {
     let trimmed = spec.trim();
     if let Some((start, end)) = trimmed.split_once(':') {
@@ -5664,6 +5906,8 @@ fn parse_frame_range_spec(spec: &str) -> Result<FrameRange> {
     }
 }
 
+// Write selected screenshots, video and audio in that order. Parent directories must
+// already exist; a later write error can leave earlier output files in place.
 fn flush_output_captures(capture: &OutputCaptureState, session: &DebugSession) -> Result<()> {
     if let Some(path) = &capture.screenshot_path {
         if capture.screenshot_range.is_some() {
@@ -5721,6 +5965,7 @@ fn flush_output_captures(capture: &OutputCaptureState, session: &DebugSession) -
     Ok(())
 }
 
+// Append .gif only when no extension exists; the writer validates explicit extensions later.
 fn video_output_path(base: &str) -> String {
     let path = Path::new(base);
     let ext = path
@@ -5734,6 +5979,8 @@ fn video_output_path(base: &str) -> String {
     }
 }
 
+// Validate the image extension and optionally add a zero-padded frame suffix.
+// Extensionless screenshot requests default to PNG.
 fn screenshot_output_path(base: &str, frame: u64, force_sequence: bool) -> Result<String> {
     let base_path = Path::new(base);
     let ext = base_path
@@ -5771,6 +6018,7 @@ fn screenshot_output_path(base: &str, frame: u64, force_sequence: bool) -> Resul
     }
 }
 
+// Append .wav when needed; an existing extension is preserved even though output is always WAV.
 fn wav_output_path(base: &str) -> String {
     let path = Path::new(base);
     if path.extension().is_some() {
@@ -5780,6 +6028,8 @@ fn wav_output_path(base: &str) -> String {
     }
 }
 
+// Dispatch screenshot encoding by extension. Direct extensionless calls default to BMP;
+// the CLI path helper normally supplies an explicit PNG extension first.
 fn write_screenshot(
     path: &str,
     framebuffer: &[u8; 160 * 144],
@@ -5801,6 +6051,7 @@ fn write_screenshot(
     }
 }
 
+// Convert the frame to RGB and save a 160 by 144 image through the image library.
 fn write_png(
     path: &str,
     framebuffer: &[u8; 160 * 144],
@@ -5816,10 +6067,12 @@ fn write_png(
     Ok(())
 }
 
+// Encode the supplied interleaved samples and write the resulting WAV bytes to the given path.
 fn write_wav(path: &str, sample_rate: u32, samples: &[i16]) -> Result<()> {
     fs::write(path, encode_wav(sample_rate, samples)).map_err(anyhow::Error::from)
 }
 
+// Encode the retained scalar frames as GIF or monochrome Y4M; other extensions are rejected.
 fn write_video(path: &str, frames: &[(u64, Vec<u8>)]) -> Result<()> {
     let ext = Path::new(path)
         .extension()
@@ -5833,6 +6086,7 @@ fn write_video(path: &str, frames: &[(u64, Vec<u8>)]) -> Result<()> {
     }
 }
 
+// Map four scalar shades to the fixed compatibility palette, clamping indices above three.
 fn compat_palette_rgb(framebuffer: &[u8; 160 * 144]) -> Vec<u8> {
     const CGB_COMPAT: [(u8, u8, u8); 4] = [
         (255, 255, 214),
@@ -5848,6 +6102,8 @@ fn compat_palette_rgb(framebuffer: &[u8; 160 * 144]) -> Vec<u8> {
     rgb
 }
 
+// Prefer the compatibility palette when selected, otherwise expand a complete RGB555
+// frame to RGB888. Missing or incorrectly sized RGB555 data falls back to scalar grayscale.
 fn rgb_from_framebuffer(
     framebuffer: &[u8; 160 * 144],
     rgb555: Option<&[u16]>,
@@ -5875,6 +6131,7 @@ fn rgb_from_framebuffer(
     rgb
 }
 
+// Emit a binary P6 image with a fixed 160 by 144 RGB payload and an 8-bit channel range.
 fn encode_ppm(
     framebuffer: &[u8; 160 * 144],
     rgb555: Option<&[u16]>,
@@ -5887,6 +6144,8 @@ fn encode_ppm(
     out
 }
 
+// Build an uncompressed 24-bit BMP with checked header sizes. Store rows bottom-up
+// and channels in BGR order, padding each row to a four-byte boundary.
 fn encode_bmp(
     framebuffer: &[u8; 160 * 144],
     rgb555: Option<&[u16]>,
@@ -5937,6 +6196,9 @@ fn encode_bmp(
     Ok(out)
 }
 
+// Emit a PCM stereo, 16-bit little-endian RIFF/WAVE stream. The caller supplies the
+// sample rate and complete interleaved stereo frames; this helper does not validate them
+// or support RF64, and oversized 32-bit length fields saturate rather than returning an error.
 fn encode_wav(sample_rate: u32, samples: &[i16]) -> Vec<u8> {
     let data_len = samples.len() * std::mem::size_of::<i16>();
     let riff_len = 36usize + data_len;
@@ -5963,6 +6225,8 @@ fn encode_wav(sample_rate: u32, samples: &[i16]) -> Vec<u8> {
     out
 }
 
+// Encode grayscale frames with an infinite loop and centisecond delays approximating
+// 59.727 frames per second. Stored frame numbers are ignored; input order determines playback.
 fn encode_gif(frames: &[(u64, Vec<u8>)]) -> Result<Vec<u8>> {
     const WIDTH: u16 = 160;
     const HEIGHT: u16 = 144;
@@ -5992,6 +6256,7 @@ fn encode_gif(frames: &[(u64, Vec<u8>)]) -> Result<Vec<u8>> {
             frame.width = WIDTH;
             frame.height = HEIGHT;
             frame.buffer = Cow::Owned(framebuffer_to_grayscale_indices(framebuffer));
+            // Carry the fractional centisecond remainder between frames to avoid a constant-delay timing bias.
             delay_remainder = delay_remainder.saturating_add(100 * FPS_DEN);
             let mut delay = delay_remainder / FPS_NUM;
             delay_remainder %= FPS_NUM;
@@ -6007,6 +6272,8 @@ fn encode_gif(frames: &[(u64, Vec<u8>)]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+// Emit a monochrome 160 by 144 Y4M sequence at 59727/1000 frames per second.
+// Stored frame numbers are ignored; malformed buffer lengths panic under the internal capture invariant.
 fn encode_y4m(frames: &[(u64, Vec<u8>)]) -> Vec<u8> {
     const WIDTH: usize = 160;
     const HEIGHT: usize = 144;
@@ -6023,6 +6290,7 @@ fn encode_y4m(frames: &[(u64, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
+// Choose the scalar range from frame contents and map every shade to an 8-bit grayscale index.
 fn framebuffer_to_grayscale_indices(framebuffer: &[u8; 160 * 144]) -> Vec<u8> {
     let max_value = framebuffer_intensity_max(framebuffer);
     framebuffer
@@ -6032,6 +6300,8 @@ fn framebuffer_to_grayscale_indices(framebuffer: &[u8; 160 * 144]) -> Vec<u8> {
         .collect()
 }
 
+// Treat a frame containing any value above three as a 0..31 scalar frame; otherwise use 0..3.
+// This is a content-based choice rather than an explicit hardware-mode tag.
 fn framebuffer_intensity_max(framebuffer: &[u8; 160 * 144]) -> u32 {
     if framebuffer.iter().copied().any(|pixel| pixel > 3) {
         31
@@ -6040,12 +6310,14 @@ fn framebuffer_intensity_max(framebuffer: &[u8; 160 * 144]) -> u32 {
     }
 }
 
+// Clamp to the chosen shade range, scale with rounding and invert so shade zero becomes white.
 fn framebuffer_gray_to_u8(value: u8, max_value: u32) -> u8 {
     let shade = u32::from(value).min(max_value);
     let scaled = (shade * 255 + (max_value / 2)) / max_value.max(1);
     255u8.saturating_sub(scaled as u8)
 }
 
+// Build a case-folded kind=value comparison label without trimming either input.
 fn suggestion_label(kind: &str, value: &str) -> String {
     format!(
         "{}={}",
@@ -6054,6 +6326,7 @@ fn suggestion_label(kind: &str, value: &str) -> String {
     )
 }
 
+// Convert all supplied expectations to labels; stage selection is handled by the caller.
 fn expected_suggestions_to_labels(expected: &[ExpectedSuggestion]) -> Vec<String> {
     expected
         .iter()
@@ -6061,6 +6334,7 @@ fn expected_suggestions_to_labels(expected: &[ExpectedSuggestion]) -> Vec<String
         .collect()
 }
 
+// Trim and deduplicate nonempty diagnostic codes while preserving their case.
 fn normalize_diagnostic_expectations(values: &[String]) -> BTreeSet<String> {
     values
         .iter()
@@ -6069,6 +6343,8 @@ fn normalize_diagnostic_expectations(values: &[String]) -> BTreeSet<String> {
         .collect()
 }
 
+// Remove hexadecimal prefixes, lowercase, sort and deduplicate opcode labels.
+// This is text normalization; it does not parse byte values or add leading zeroes.
 fn normalize_opcode_expectations(values: &[String]) -> Vec<String> {
     let mut out = values
         .iter()
@@ -6086,6 +6362,7 @@ fn normalize_opcode_expectations(values: &[String]) -> Vec<String> {
     out
 }
 
+// Resolve event aliases and return sorted unique nonempty labels.
 fn normalize_event_expectations(values: &[String]) -> Vec<String> {
     let mut out = values
         .iter()
@@ -6097,6 +6374,7 @@ fn normalize_event_expectations(values: &[String]) -> Vec<String> {
     out
 }
 
+// Merge aliases under canonical labels, keeping the greatest minimum count for each event.
 fn normalize_event_count_floor_expectations(values: &BTreeMap<String, u64>) -> Vec<(String, u64)> {
     let mut merged = BTreeMap::new();
     for (event_type, floor) in values {
@@ -6110,10 +6388,12 @@ fn normalize_event_count_floor_expectations(values: &BTreeMap<String, u64>) -> V
     merged.into_iter().collect()
 }
 
+// Render a canonical event label and its required minimum count for regression output.
 fn format_event_count_floor_label(event_type: &str, floor: u64) -> String {
     format!("{}>={}", event_type, floor)
 }
 
+// Normalize and merge count requirements before formatting the expectation list.
 fn expected_event_count_floor_to_labels(values: &BTreeMap<String, u64>) -> Vec<String> {
     normalize_event_count_floor_expectations(values)
         .into_iter()
@@ -6121,6 +6401,7 @@ fn expected_event_count_floor_to_labels(values: &BTreeMap<String, u64>) -> Vec<S
         .collect()
 }
 
+// Trim and lowercase watch names, then sort and deduplicate nonempty entries.
 fn normalize_watch_name_expectations(values: &[String]) -> Vec<String> {
     let mut out = values
         .iter()
@@ -6132,6 +6413,8 @@ fn normalize_watch_name_expectations(values: &[String]) -> Vec<String> {
     out
 }
 
+// Map each event variant to a regression label. OAM and serial start/completion
+// events share labels, while HDMA versus GDMA block/completion labels depend on mode.
 fn normalize_event_type_from_debug_event(event: &DebugEvent) -> String {
     match event {
         DebugEvent::ScanlineAdvance { .. } => "scanline".to_string(),
@@ -6222,6 +6505,8 @@ fn normalize_event_type_from_debug_event(event: &DebugEvent) -> String {
     }
 }
 
+// Resolve supported case-insensitive aliases to regression labels; retain unknown
+// trimmed lowercase labels. This exact label mapping differs from event_matches substring filters.
 fn normalize_event_type_label(value: &str) -> String {
     let normalized = value.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -6343,6 +6628,7 @@ mod tests {
         LoadedLinkSession, OutputFilterOptions, SessionInputProgram,
     };
 
+    // Build a synthetic session description with a physical slot and default controls; no ROM is opened.
     fn test_link_session(name: &str, slot: u8) -> LoadedLinkSession {
         LoadedLinkSession {
             name: Some(name.to_string()),
@@ -6363,12 +6649,14 @@ mod tests {
     }
 
     #[test]
+    // Check equivalent decimal and explicitly prefixed hexadecimal inputs.
     fn parse_u16_value_accepts_hex_and_decimal() {
         assert_eq!(parse_u16_value("255").unwrap(), 255);
         assert_eq!(parse_u16_value("0x00FF").unwrap(), 255);
     }
 
     #[test]
+    // Check the parsed name, address and size of one WRAM watch.
     fn parse_watch_window_spec_accepts_hex_window() {
         let spec = parse_watch_window_spec("wram:0xC000:0x40").unwrap();
         assert_eq!(spec.name, "wram");
@@ -6377,6 +6665,7 @@ mod tests {
     }
 
     #[test]
+    // Check that a missing size reports the expected watch-window syntax.
     fn parse_watch_window_spec_rejects_missing_parts() {
         let err = parse_watch_window_spec("wram:0xC000")
             .unwrap_err()
@@ -6385,6 +6674,8 @@ mod tests {
     }
 
     #[test]
+    // Filter a synthetic linked report, retaining runner totals and session metadata
+    // while removing unrequested CPU, video and event sections.
     fn link_session_reports_honor_minimal_section_filtering() {
         let mut value = json!({
             "runner_summary": {"exchange_count": 3},
@@ -6416,6 +6707,7 @@ mod tests {
     }
 
     #[test]
+    // Check the input-mask and DMA diagnostic mappings remain distinct.
     fn diagnostic_mapping_keeps_joypad_mask_out_of_dma_bucket() {
         assert_eq!(
             super::map_kokura_diagnostic_code_to_sarakura("InputReadWithoutJoypadMask"),
@@ -6428,6 +6720,7 @@ mod tests {
     }
 
     #[test]
+    // Check representative scores in each severity class, without calibrating real fault likelihood.
     fn diff_severity_classification_is_stable() {
         assert_eq!(classify_diff_severity(0), "none");
         assert_eq!(classify_diff_severity(8), "low");
@@ -6437,6 +6730,7 @@ mod tests {
     }
 
     #[test]
+    // Check that case and hexadecimal-prefix variants collapse to one opcode label.
     fn opcode_expectations_normalize_hex_prefix() {
         assert_eq!(
             normalize_opcode_expectations(&["0xF4".into(), "f4".into()]),
@@ -6445,11 +6739,13 @@ mod tests {
     }
 
     #[test]
+    // Check case folding of both parts of a suggestion comparison label.
     fn suggestion_labels_are_case_insensitive() {
         assert_eq!(suggestion_label("Event", "VBLANK"), "event=vblank");
     }
 
     #[test]
+    // Check selected PPU, bank and VBlank aliases and duplicate elimination.
     fn event_expectations_normalize_aliases() {
         assert_eq!(normalize_event_type_label("PpuModeChange"), "ppu_mode");
         assert_eq!(normalize_event_type_label("bank_switch"), "bank");
@@ -6460,6 +6756,7 @@ mod tests {
     }
 
     #[test]
+    // Check that alias collisions preserve the largest requested floor and sorted output.
     fn event_count_floor_expectations_merge_aliases() {
         let mut values = BTreeMap::new();
         values.insert("VBLANK".to_string(), 1);
@@ -6472,6 +6769,7 @@ mod tests {
     }
 
     #[test]
+    // Check case variants of one watch name collapse to a single expectation.
     fn watch_name_expectations_normalize_case() {
         assert_eq!(
             normalize_watch_name_expectations(&["Board_OAM".into(), "board_oam".into()]),
@@ -6480,6 +6778,7 @@ mod tests {
     }
 
     #[test]
+    // Check the render, LCD toggle and LYC labels used by regression expectations.
     fn event_expectations_cover_ppu_timing_aliases() {
         assert_eq!(
             normalize_event_type_label("scanline_render"),
@@ -6490,6 +6789,7 @@ mod tests {
     }
 
     #[test]
+    // Check symbol and bank extraction from one execution-breakpoint specification.
     fn breakpoint_spec_accepts_symbol_and_bank() {
         let spec = parse_breakpoint_spec("symbol:MainLoop@bank:1").unwrap();
         assert_eq!(spec.symbol.as_deref(), Some("MainLoop"));
@@ -6497,14 +6797,16 @@ mod tests {
     }
 
     #[test]
+    // Check parsing of a three-term observation condition; no ROM or symbol resolution runs here.
     fn observation_condition_accepts_frame_ly_and_symbol_terms() {
         let condition =
-            parse_observation_condition("frame=379&&ly=42&&symbol=x_transfer_stage_5a14_asm")
+            parse_observation_condition("frame=120&&ly=42&&symbol=DrawFrame")
                 .unwrap();
         assert_eq!(condition.terms.len(), 3);
     }
 
     #[test]
+    // Make both machine and watch digests differ, then check watch-only comparison reports the watch mismatch.
     fn compare_replay_reports_watch_only_prefers_watch_digest() {
         let mut reference = sample_replay_report(0xAAAA_BBBB_CCCC_DDDD);
         let mut actual = sample_replay_report(0x1111_2222_3333_4444);
@@ -6523,6 +6825,7 @@ mod tests {
     }
 
     #[test]
+    // Check the address and length of a named OAM watchpoint.
     fn watchpoint_spec_accepts_range() {
         let spec = parse_watchpoint_spec("oam@0xFE00+0x00A0").unwrap();
         assert_eq!(spec.addr, 0xFE00);
@@ -6530,24 +6833,28 @@ mod tests {
     }
 
     #[test]
+    // Check acceptance of an MMIO address and rejection of a WRAM address.
     fn mmio_stop_spec_requires_ff_range() {
         assert!(parse_mmio_stop_spec("0xFF46").is_ok());
         assert!(parse_mmio_stop_spec("0xC000").is_err());
     }
 
     #[test]
+    // Check successful parsing of a source:phase pair and its source field; the phase is not asserted separately.
     fn interrupt_stop_spec_accepts_source_and_phase() {
         let spec = parse_interrupt_stop_spec("timer:requested").unwrap();
         assert_eq!(spec.source.as_deref(), Some("timer"));
     }
 
     #[test]
+    // Check acceptance and retention of the OAM-start stop label.
     fn dma_stop_spec_accepts_known_event() {
         let spec = parse_dma_stop_spec("oam_start").unwrap();
         assert_eq!(spec.event, "oam_start");
     }
 
     #[test]
+    // Check canonical DMA, mapper and APU labels plus cancellation and ignored-write aliases.
     fn event_expectations_cover_dma_aliases() {
         assert_eq!(normalize_event_type_label("oam_dma"), "oam_dma");
         assert_eq!(normalize_event_type_label("gdma_stall"), "gdma_stall");
@@ -6567,6 +6874,7 @@ mod tests {
     }
 
     #[test]
+    // Check inclusive frame parsing and rejection of zero or reversed bounds.
     fn frame_range_spec_accepts_single_and_range_forms() {
         assert_eq!(
             parse_frame_range_spec("12").unwrap(),
@@ -6581,6 +6889,7 @@ mod tests {
     }
 
     #[test]
+    // Check a numbered BMP path and the extensionless PNG default using Windows-style paths.
     fn screenshot_output_path_uses_sequence_names_for_ranges() {
         assert_eq!(
             screenshot_output_path("captures\\title.bmp", 42, true).unwrap(),
@@ -6593,6 +6902,7 @@ mod tests {
     }
 
     #[test]
+    // Check the GIF default and preservation of an explicit Y4M extension.
     fn video_output_path_defaults_to_gif() {
         assert_eq!(video_output_path("captures\\title"), "captures\\title.gif");
         assert_eq!(
@@ -6602,6 +6912,7 @@ mod tests {
     }
 
     #[test]
+    // Advance a finite input sequence and check it returns to the configured fixed START mask.
     fn session_input_program_replays_sequence_then_fallback_mask() {
         let session = LoadedLinkSession {
             name: None,
@@ -6627,6 +6938,7 @@ mod tests {
     }
 
     #[test]
+    // Check hyphenated option keys normalize to underscore-based field names.
     fn inline_link_session_key_normalization_supports_hyphen_aliases() {
         assert_eq!(
             normalize_inline_link_session_key("input-seq"),
@@ -6639,6 +6951,8 @@ mod tests {
     }
 
     #[test]
+    // Parse an inline Windows-style session description and check paths, sequence,
+    // audio capacity and both watches. This test does not access the named files.
     fn inline_link_session_spec_parses_paths_and_watch_windows() {
         let base = std::path::Path::new("C:\\kitaqgb_project\\kokura");
         let session = parse_inline_link_session_spec(
@@ -6667,6 +6981,8 @@ mod tests {
     }
 
     #[test]
+    // Check a shuffled three-session description becomes host-first with the selected peer index.
+    // This verifies layout configuration, not serial exchange or physical adapter behavior.
     fn four_player_link_layout_sorts_sessions_by_slot() {
         let job = LoadedLinkJob {
             topology: normalize_link_topology_label("link4").unwrap(),
@@ -6740,6 +7056,7 @@ mod tests {
     }
 
     #[test]
+    // Check accepted spellings resolve to the DMG-07 topology label.
     fn dmg07_topology_aliases_normalize_to_physical_adapter_label() {
         for alias in ["dmg07", "DMG-07", "dmg_07", "four_player_adapter_dmg07"] {
             assert_eq!(normalize_link_topology_label(alias).unwrap(), "dmg07");
@@ -6747,6 +7064,7 @@ mod tests {
     }
 
     #[test]
+    // Check DMG-07 slot ordering and the selected topology for a contiguous three-player layout.
     fn dmg07_link_layout_sorts_contiguous_physical_slots() {
         let job = LoadedLinkJob {
             topology: normalize_link_topology_label("DMG-07").unwrap(),
@@ -6769,6 +7087,7 @@ mod tests {
     }
 
     #[test]
+    // Check that a missing middle slot rejects the DMG-07 layout with a specific error.
     fn dmg07_link_layout_rejects_slot_gaps() {
         let job = LoadedLinkJob {
             topology: "dmg07".to_string(),
@@ -6786,6 +7105,7 @@ mod tests {
     }
 
     #[test]
+    // Check RIFF/WAVE/data markers and payload length for two stereo frames; playback is not tested.
     fn wav_encoder_emits_expected_header_sizes() {
         let wav = encode_wav(32_768, &[1, -2, 3, -4]);
         assert_eq!(&wav[0..4], b"RIFF");
@@ -6796,6 +7116,7 @@ mod tests {
     }
 
     #[test]
+    // Check the Y4M stream prefix and one frame marker, without decoding its pixels.
     fn y4m_encoder_emits_header_and_frame_marker() {
         let frames = vec![(1u64, vec![0u8; 160 * 144])];
         let y4m = encode_y4m(&frames);
@@ -6804,6 +7125,7 @@ mod tests {
     }
 
     #[test]
+    // Check a one-frame encoding starts with GIF89a; this does not validate playback timing.
     fn gif_encoder_emits_gif_header() {
         let frames = vec![(1u64, vec![0u8; 160 * 144])];
         let gif = encode_gif(&frames).unwrap();
@@ -6811,6 +7133,8 @@ mod tests {
     }
 
     #[test]
+    // Write a small synthetic metadata file, load selected fields and attempt to remove it.
+    // The fixed temporary filename assumes this test is not running concurrently in multiple processes.
     fn toolchain_build_report_loader_accepts_json() {
         let temp_dir = std::env::temp_dir();
         let path = temp_dir.join("kokura_toolchain_build_report_test.json");
@@ -6825,6 +7149,7 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    // Build a deterministic single-checkpoint/slice report whose digest can be varied without executing a ROM.
     fn sample_replay_report(digest: u64) -> ReplayReport {
         ReplayReport {
             enabled: true,
@@ -6881,6 +7206,7 @@ mod tests {
     }
 
     #[test]
+    // Check the first mismatch kind and the derived frame window and LCD watch recommendation.
     fn replay_report_comparison_flags_checkpoint_digest_mismatch() {
         let reference = sample_replay_report(0xAAAA_BBBB_CCCC_DDDD);
         let actual = sample_replay_report(0x1111_2222_3333_4444);
@@ -6908,6 +7234,8 @@ mod tests {
     }
 
     #[test]
+    // Check the proposed relative first/last capture frames and watch overlay.
+    // This constructs a plan only; no snapshot files are saved.
     fn replay_mismatch_snapshot_plan_builds_relative_triggers_and_overlay_specs() {
         let reference = sample_replay_report(0xAAAA_BBBB_CCCC_DDDD);
         let actual = sample_replay_report(0x1111_2222_3333_4444);
@@ -6934,6 +7262,7 @@ mod tests {
     }
 
     #[test]
+    // Parse recommended DMA/IRQ stops and watch windows back into debugger configuration.
     fn recommended_replay_followup_specs_round_trip_into_debugger_overlays() {
         let stops = parse_recommended_stop_specs(&[
             "--stop-on-dma oam_start".to_string(),
@@ -6956,6 +7285,8 @@ mod tests {
     }
 
     #[test]
+    // Check path and reported-hash propagation into a tape, plus the no-replay case.
+    // The synthetic hash is metadata, not a digest computed from an actual ROM.
     fn replay_tape_builder_carries_rom_path_and_sha() {
         let session = DebugSession::new(Machine::new());
         let mut report = session.report();
@@ -6985,6 +7316,7 @@ mod tests {
     }
 
     #[test]
+    // Render one synthetic function and check canonical name, user note and calling-convention text.
     fn markdown_renderer_emits_canonical_name_and_user_notes() {
         let report = DecompileReport {
             schema_version: "1",

@@ -11,6 +11,8 @@ pub struct ExecuteBreakpointSpec {
 }
 
 impl ExecuteBreakpointSpec {
+    // Describe symbol before PC when both are present, appending the optional
+    // bank. An invalid empty specification receives an explicit invalid label.
     pub fn label(&self) -> String {
         if let Some(symbol) = &self.symbol {
             if let Some(bank) = self.bank {
@@ -27,6 +29,8 @@ impl ExecuteBreakpointSpec {
         "breakpoint:<invalid>".to_string()
     }
 
+    // Require every supplied bank/PC constraint and an exact supplied symbol
+    // match. A bank-only specification never matches; no source-name inference occurs.
     pub fn matches(&self, rom_bank: u16, pc: u16, symbol: Option<&str>) -> bool {
         if let Some(expected_bank) = self.bank {
             if expected_bank != rom_bank {
@@ -44,6 +48,8 @@ impl ExecuteBreakpointSpec {
         self.pc.is_some()
     }
 
+    // Require PC or a nonblank symbol, trimming and discarding an empty
+    // optional symbol. PC and symbol may both remain as conjunctive constraints.
     pub fn validate(self) -> Result<Self, String> {
         if self.pc.is_none()
             && self
@@ -74,11 +80,13 @@ pub struct MemoryWatchpointSpec {
     pub size: u16,
 }
 
+// Use a one-byte watch when serde omits its size field.
 const fn default_watch_size() -> u16 {
     1
 }
 
 impl MemoryWatchpointSpec {
+    // Use an explicit name or synthesize an address/range label.
     pub fn label(&self) -> String {
         self.name.clone().unwrap_or_else(|| {
             if self.size <= 1 {
@@ -89,6 +97,8 @@ impl MemoryWatchpointSpec {
         })
     }
 
+    // Require a nonempty range contained in the 16-bit address space and
+    // normalize the optional label; this does not inspect memory contents.
     pub fn validate(self) -> Result<Self, String> {
         if self.size == 0 {
             return Err("watchpoint size must be non-zero".to_string());
@@ -119,12 +129,15 @@ pub struct MmioWriteStopSpec {
 }
 
 impl MmioWriteStopSpec {
+    // Use the supplied name or a hexadecimal MMIO address label.
     pub fn label(&self) -> String {
         self.name
             .clone()
             .unwrap_or_else(|| format!("mmio@{:04X}", self.addr))
     }
 
+    // Accept addresses FF00-FFFF and normalize the optional name. This
+    // range includes HRAM and IE as well as ordinary device registers.
     pub fn validate(self) -> Result<Self, String> {
         if !(0xFF00..=0xFFFF).contains(&self.addr) {
             return Err(format!(
@@ -152,6 +165,7 @@ pub enum InterruptStopPhase {
 }
 
 impl Default for InterruptStopPhase {
+    // Default to observing any supported interrupt phase.
     fn default() -> Self {
         Self::Any
     }
@@ -166,6 +180,7 @@ pub struct InterruptStopSpec {
 }
 
 impl InterruptStopSpec {
+    // Combine the source or any-source marker with the requested phase label.
     pub fn label(&self) -> String {
         let phase = match self.phase {
             InterruptStopPhase::Requested => "requested",
@@ -180,6 +195,8 @@ impl InterruptStopSpec {
         }
     }
 
+    // Trim/lowercase the optional source and accept the five hardware
+    // source names or any; leave phase matching to event processing.
     pub fn validate(self) -> Result<Self, String> {
         let source = self
             .source
@@ -208,10 +225,13 @@ pub struct DmaStopSpec {
 }
 
 impl DmaStopSpec {
+    // Prefix the stored DMA event name for stop reports.
     pub fn label(&self) -> String {
         format!("dma:{}", self.event)
     }
 
+    // Normalize the DMA event name and accept only the explicit modeled
+    // start/completion/block/cancel/stall/deferred/ignored event set.
     pub fn validate(self) -> Result<Self, String> {
         let event = self.event.trim().to_ascii_lowercase();
         match event.as_str() {
@@ -247,6 +267,8 @@ pub struct StopConditionSet {
 }
 
 impl StopConditionSet {
+    // Normalize and validate each condition list in order, returning the
+    // first error. The consumed input is not returned as a partially validated set.
     pub fn validate(mut self) -> Result<Self, String> {
         self.breakpoints = self
             .breakpoints
@@ -276,6 +298,7 @@ impl StopConditionSet {
         Ok(self)
     }
 
+    // Report empty only when all five stop-condition lists are empty.
     pub fn is_empty(&self) -> bool {
         self.breakpoints.is_empty()
             && self.watchpoints.is_empty()
@@ -284,6 +307,8 @@ impl StopConditionSet {
             && self.dma_events.is_empty()
     }
 
+    // Clone the base and append each overlay list without deduplication
+    // or validation; matching entries are retained in their input order.
     pub fn merged(&self, overlay: &StopConditionSet) -> StopConditionSet {
         let mut merged = self.clone();
         merged.breakpoints.extend(overlay.breakpoints.clone());
@@ -309,15 +334,19 @@ pub struct ReplayControlSet {
     pub stop_on_divergence: bool,
 }
 
+// Use one frame between checkpoints when the interval is omitted.
 const fn default_replay_checkpoint_interval_frames() -> u64 {
     1
 }
 
+// Retain sixteen checkpoints when capacity is omitted.
 const fn default_replay_max_checkpoints() -> usize {
     16
 }
 
 impl Default for ReplayControlSet {
+    // Disable replay by default, retaining one-frame intervals and sixteen
+    // checkpoint slots with no auto-rewind or divergence stop.
     fn default() -> Self {
         Self {
             enabled: false,
@@ -330,6 +359,8 @@ impl Default for ReplayControlSet {
 }
 
 impl ReplayControlSet {
+    // When replay is enabled, reject zero checkpoint interval/capacity and
+    // a zero requested rewind. Disabled replay leaves these values unchecked.
     pub fn validate(self) -> Result<Self, String> {
         if self.enabled {
             if self.checkpoint_interval_frames == 0 {
@@ -347,6 +378,9 @@ impl ReplayControlSet {
         Ok(self)
     }
 
+    // OR enable/divergence flags and use nondefault overlay interval/capacity
+    // values. An absent rewind preserves the base, so this merge cannot clear
+    // a rewind or reset a customized value using the overlay default.
     pub fn merged(&self, overlay: &ReplayControlSet) -> ReplayControlSet {
         let default = ReplayControlSet::default();
         ReplayControlSet {
@@ -372,6 +406,7 @@ impl ReplayControlSet {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Capture resolved source metadata for a stop report without reading a file.
 pub struct SourceLocationStop {
     pub path: String,
     pub line: u32,
@@ -383,6 +418,7 @@ pub struct SourceLocationStop {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Retain register/stack/source context around an observed execution event.
 pub struct ExecutionContextFrame {
     pub reason: String,
     pub rom_bank: u16,
@@ -402,6 +438,8 @@ pub struct ExecutionContextFrame {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Describe the selected stop with emulation position and recent context.
+// This payload alone does not evaluate or enforce stop conditions.
 pub struct StopReason {
     pub kind: String,
     pub label: String,
@@ -423,12 +461,14 @@ mod tests {
     };
 
     #[test]
+    // Reject an empty default breakpoint.
     fn breakpoint_requires_pc_or_symbol() {
         let err = ExecuteBreakpointSpec::default().validate().unwrap_err();
         assert!(err.contains("either pc or symbol"));
     }
 
     #[test]
+    // Reject a watched range crossing the address-space end.
     fn watchpoint_rejects_overflow() {
         let err = MemoryWatchpointSpec {
             name: None,
@@ -441,6 +481,7 @@ mod tests {
     }
 
     #[test]
+    // Reject a WRAM address as an MMIO-write stop.
     fn mmio_requires_ff_range() {
         let err = MmioWriteStopSpec {
             addr: 0xC000,
@@ -452,6 +493,7 @@ mod tests {
     }
 
     #[test]
+    // Verify whitespace/case normalization of a timer source.
     fn interrupt_spec_normalizes_source() {
         let spec = InterruptStopSpec {
             source: Some(" Timer ".to_string()),
@@ -463,6 +505,7 @@ mod tests {
     }
 
     #[test]
+    // Reject an unrecognized DMA stop-event name.
     fn dma_event_rejects_unknown_value() {
         let err = DmaStopSpec {
             event: "weird".to_string(),
@@ -473,6 +516,7 @@ mod tests {
     }
 
     #[test]
+    // Check that distinct base/overlay condition lists both survive merging.
     fn stop_condition_set_merges_lists() {
         let base = StopConditionSet {
             breakpoints: vec![ExecuteBreakpointSpec {
@@ -495,6 +539,7 @@ mod tests {
     }
 
     #[test]
+    // Reject a zero interval with replay enabled.
     fn replay_control_rejects_zero_interval_when_enabled() {
         let err = ReplayControlSet {
             enabled: true,
@@ -507,6 +552,8 @@ mod tests {
     }
 
     #[test]
+    // Check nondefault overlay interval, capacity, rewind and divergence
+    // settings replace or enable the corresponding base settings.
     fn replay_control_merges_overlay_values() {
         let base = ReplayControlSet {
             enabled: true,

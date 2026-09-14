@@ -54,6 +54,7 @@ pub struct DiagnosticEventEmitter {
 }
 
 impl Default for DiagnosticEventEmitter {
+    // Start disabled with sequential IDs and capacity for 4096 distinct summary keys.
     fn default() -> Self {
         Self {
             enabled: false,
@@ -66,25 +67,31 @@ impl Default for DiagnosticEventEmitter {
 }
 
 impl DiagnosticEventEmitter {
+    // Toggle future recording without clearing previously retained aggregates.
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
 
+    // Expose whether subsequent record calls are accepted.
     pub fn enabled(&self) -> bool {
         self.enabled
     }
 
+    // Discard aggregates and key indices, restarting event IDs while preserving the enabled flag.
     pub fn clear(&mut self) {
         self.next_id = 1;
         self.events.clear();
         self.index_by_summary_key.clear();
     }
 
+    // Borrow the retained aggregate list without draining it or changing its insertion order.
     pub fn events(&self) -> &[DiagnosticEvent] {
         &self.events
     }
 
     #[allow(clippy::too_many_arguments)]
+    // Aggregate enabled observations by type, PC, bank, address and access kind.
+    // Value, severity and display timing do not distinguish keys; the first event owns their top-level fields.
     pub fn record_gb_event(
         &mut self,
         event_type: &str,
@@ -120,7 +127,10 @@ impl DiagnosticEventEmitter {
         if let Some(idx) = self.index_by_summary_key.get(&summary_key).copied() {
             let event = &mut self.events[idx];
             event.count = event.count.saturating_add(1);
+            // Store the latest supplied frame, not a monotonic maximum; callers may have rewound execution.
             event.last_seen = frame;
+            // Keep at most four subsequent examples. The first occurrence remains in the aggregate
+            // fields, so it is not duplicated in sample_events.
             if event.sample_events.len() < 4 {
                 event.sample_events.push(DiagnosticEventSample {
                     frame,
@@ -134,9 +144,11 @@ impl DiagnosticEventEmitter {
             }
             return;
         }
+        // At capacity, silently discard new keys; existing keys still update their counts above.
         if self.events.len() >= self.max_unique_events {
             return;
         }
+        // Assign an ID only to a newly retained key; saturating counters avoid arithmetic wraparound.
         let event_id = format!("evt_{:06}", self.next_id);
         self.next_id = self.next_id.saturating_add(1);
         let event = DiagnosticEvent {

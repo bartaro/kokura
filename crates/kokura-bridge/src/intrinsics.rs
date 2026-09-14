@@ -32,6 +32,8 @@ pub struct KitaqgbIntrinsicMatch {
 }
 
 impl KitaqgbIntrinsicMatch {
+    // Identify categories associated with drawing, transfer or palette work.
+    // The result predicts intent from a name; it does not verify changed pixels.
     pub fn has_likely_visual_effect(&self) -> bool {
         matches!(
             self.kind,
@@ -50,6 +52,8 @@ impl KitaqgbIntrinsicMatch {
         )
     }
 
+    // Select explicit tile/row flush, presentation and OAM-transfer categories
+    // for diagnostics that expect a display-update boundary.
     pub fn is_flush_like(&self) -> bool {
         matches!(
             self.kind,
@@ -62,8 +66,13 @@ impl KitaqgbIntrinsicMatch {
     }
 }
 
+// Apply ordered, ASCII-case-insensitive name rules and return the first
+// matching intrinsic category. Broad substring rules can match user names;
+// canonical_name preserves the supplied spelling rather than normalizing it.
 pub fn classify_symbol_name(symbol: &str) -> Option<KitaqgbIntrinsicMatch> {
     let lower = symbol.to_ascii_lowercase();
+    // Use exact palette-helper names here so unrelated prefixed symbols
+    // do not inherit the palette category from a substring alone.
     let is_exact_cgb_palette_helper = matches!(
         lower.as_str(),
         "cgb_bg_palette"
@@ -85,6 +94,8 @@ pub fn classify_symbol_name(symbol: &str) -> Option<KitaqgbIntrinsicMatch> {
             | "cgb__write_colors_obj_raw"
     );
 
+    // Check guards and specific helpers before broader tile, memory, audio
+    // and bank patterns; this ordering resolves overlapping names.
     let kind = if lower.starts_with("kq_trap_check_") {
         KitaqgbIntrinsicKind::TrapCheck
     } else if lower.starts_with("kq_bank_ok_") || lower.starts_with("kq_sp_ok_") {
@@ -210,6 +221,8 @@ mod tests {
     use super::{classify_symbol_name, KitaqgbIntrinsicKind};
 
     #[test]
+    // Check three attribute/color bulk or unsafe tile helper names against
+    // the color-tile category.
     fn classifies_new_cgb_tile_intrinsics() {
         let attr = classify_symbol_name("__settileattr_bulk_fast").unwrap();
         assert!(matches!(attr.kind, KitaqgbIntrinsicKind::SetTileCgb));
@@ -222,6 +235,7 @@ mod tests {
     }
 
     #[test]
+    // Check repeat/clear input names and the indirect far-call helper category.
     fn classifies_new_input_and_farcall_names() {
         let repeat = classify_symbol_name("UpdateRepeatInput").unwrap();
         assert!(matches!(repeat.kind, KitaqgbIntrinsicKind::Input));
@@ -234,12 +248,15 @@ mod tests {
     }
 
     #[test]
+    // Verify that the public background-palette helper is recognized.
     fn classifies_cgb_palette_helper_names() {
         let modern = classify_symbol_name("cgb_bg_palette").unwrap();
         assert!(matches!(modern.kind, KitaqgbIntrinsicKind::CgbPalette));
     }
 
     #[test]
+    // Reject two legacy palette spellings rather than treating them as
+    // current palette helpers.
     fn does_not_classify_legacy_kq_cgb_palette_names() {
         assert!(classify_symbol_name("kq_cgb_bg_palette").is_none());
         assert!(classify_symbol_name("kq_cgb_obj_rgb").is_none());

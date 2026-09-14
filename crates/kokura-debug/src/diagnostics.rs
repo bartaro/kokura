@@ -6,6 +6,7 @@ use serde::Serialize;
 use crate::stop::StopReason;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+// Stable diagnostic identities; a code may describe a routine observation rather than an error.
 pub enum DiagnosticCode {
     WhiteScreenLcdcOff,
     WhiteScreenNoVblank,
@@ -67,6 +68,7 @@ pub enum DiagnosticCode {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+// Express the rule's reporting importance separately from heuristic candidate priority.
 pub enum Severity {
     Info,
     Warning,
@@ -74,6 +76,7 @@ pub enum Severity {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Pair a structured identity and severity with an English explanation of the observed condition.
 pub struct Diagnostic {
     pub code: DiagnosticCode,
     pub severity: Severity,
@@ -94,6 +97,8 @@ pub enum AutoDiagnosisCategory {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Keep score/confidence labels, concrete evidence and proposed next steps together.
+// stop_related is a classification hint, not proof the condition caused the stop.
 pub struct AutoDiagnosisSuspect {
     pub key: String,
     pub category: AutoDiagnosisCategory,
@@ -108,6 +113,7 @@ pub struct AutoDiagnosisSuspect {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Return a bounded ranked list and human-readable follow-up guidance without running those steps.
 pub struct AutoDiagnosisReport {
     pub generated: bool,
     pub max_items: usize,
@@ -118,6 +124,7 @@ pub struct AutoDiagnosisReport {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
+// Separate observation, implementation and validation labels in the report schema.
 pub enum TimingPackLevel {
     Obs,
     Impl,
@@ -126,6 +133,7 @@ pub enum TimingPackLevel {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
+// Keep verification status independent of feature availability; the builder below never emits Validated.
 pub enum TimingPackVerification {
     RegressionOnly,
     Candidate,
@@ -133,6 +141,8 @@ pub enum TimingPackVerification {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Record evidence, known gaps and suggested job/alias references for one subsystem.
+// Referenced jobs are labels here; the report builder does not check or execute those paths.
 pub struct TimingPackEntry {
     pub key: String,
     pub title: String,
@@ -154,6 +164,8 @@ pub struct TimingPackReport {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+// Supply a consistent observation window and current-mode flags. Derived defaults
+// are zero/false placeholders, not a substitute for collecting actual machine observations.
 pub struct DiagnosticInput {
     pub vblank_events: u64,
     pub screen_changed: bool,
@@ -229,10 +241,12 @@ pub struct DiagnosticInput {
     pub scanline_render_count: u64,
 }
 
+// Recognize either a mapped input-routine hit or an actual FF00/P1 bus read as input sampling.
 fn has_input_sampling(input: &DiagnosticInput) -> bool {
     input.input_path_count > 0 || input.joypad_read_count > 0
 }
 
+// Describe the observed sampling source and counts without treating missing routine symbols as no input.
 fn input_sampling_clause(input: &DiagnosticInput) -> String {
     match (input.input_path_count > 0, input.joypad_read_count > 0) {
         (true, true) => format!(
@@ -251,6 +265,7 @@ fn input_sampling_clause(input: &DiagnosticInput) -> String {
     }
 }
 
+// Map enum variants to stable snake-case cross-reference labels used in generated findings.
 fn diagnostic_code_slug(code: DiagnosticCode) -> &'static str {
     match code {
         DiagnosticCode::WhiteScreenLcdcOff => "white_screen_lcdc_off",
@@ -315,6 +330,7 @@ fn diagnostic_code_slug(code: DiagnosticCode) -> &'static str {
     }
 }
 
+// Bucket the heuristic priority score into display labels; these are not calibrated probabilities.
 fn confidence_from_score(score: u32) -> &'static str {
     match score {
         0..=39 => "low",
@@ -324,10 +340,13 @@ fn confidence_from_score(score: u32) -> &'static str {
     }
 }
 
+// Test whether a supplied diagnostic list contains a code regardless of its severity or message.
 fn has_code(diagnostics: &[Diagnostic], code: DiagnosticCode) -> bool {
     diagnostics.iter().any(|diagnostic| diagnostic.code == code)
 }
 
+// Select requested codes in diagnostic-list order and convert them to slugs. The wanted
+// set is deduplicated, but duplicate occurrences in diagnostics remain in the result.
 fn related_codes(diagnostics: &[Diagnostic], codes: &[DiagnosticCode]) -> Vec<String> {
     let wanted: BTreeSet<_> = codes.iter().copied().collect();
     diagnostics
@@ -337,6 +356,8 @@ fn related_codes(diagnostics: &[Diagnostic], codes: &[DiagnosticCode]) -> Vec<St
         .collect()
 }
 
+// Rank investigation candidates from supplied run-window counters, diagnostics and
+// current machine state. Scores prioritize follow-up; they do not establish a root cause or hardware accuracy.
 pub fn build_auto_diagnosis(
     machine: &Machine,
     input: DiagnosticInput,
@@ -345,6 +366,8 @@ pub fn build_auto_diagnosis(
 ) -> AutoDiagnosisReport {
     let mut suspects = Vec::new();
 
+    // Create a rendering candidate only when the supplied list contains one of these selected
+    // static/blank-effect codes; absence of VBlank alone is not this branch's trigger.
     let blank_like = has_code(diagnostics, DiagnosticCode::WhiteScreenLcdcOff)
         || has_code(diagnostics, DiagnosticCode::WhiteScreenFrameStatic)
         || has_code(diagnostics, DiagnosticCode::PresentPathNoVisibleEffect)
@@ -396,6 +419,8 @@ pub fn build_auto_diagnosis(
         });
     }
 
+    // Treat high bank activity or restore/thrash warnings as an investigation lead; legitimate
+    // bank-heavy programs can meet the same thresholds.
     let bank_like = input.bank_switches >= 6
         || input.bank_thrash_score >= 4
         || has_code(diagnostics, DiagnosticCode::FarCallBankNotRestored)
@@ -442,6 +467,7 @@ pub fn build_auto_diagnosis(
         });
     }
 
+    // Any observed DMA start can produce this timing candidate, even without a no-effect warning.
     let timing_like = input.hdma_start_count > 0
         || input.oam_dma_start_count > 0
         || input.hdma_deferred_count > 0
@@ -494,6 +520,7 @@ pub fn build_auto_diagnosis(
         });
     }
 
+    // Combine interrupt-gating counters with selected timer/serial/joypad diagnostics.
     let irq_like = input.interrupt_pending_blocked_count > 0
         || has_code(diagnostics, DiagnosticCode::InterruptPendingButNotServiced)
         || has_code(diagnostics, DiagnosticCode::SerialTransferNoInterrupt)
@@ -547,6 +574,7 @@ pub fn build_auto_diagnosis(
         });
     }
 
+    // Use existing input diagnostics to distinguish a visible no-progress hint from mere absence of input metadata.
     let input_like = has_code(diagnostics, DiagnosticCode::InputReadNoProgress)
         || has_code(diagnostics, DiagnosticCode::InputReadNoVisibleEffect)
         || has_code(diagnostics, DiagnosticCode::InputReadWithoutJoypadMask);
@@ -584,6 +612,7 @@ pub fn build_auto_diagnosis(
         });
     }
 
+    // A trigger alone can create an audio candidate; dropped PCM or missing PCM after a trigger raises its score.
     let audio_like = input.apu_trigger_count > 0
         || input.apu_pcm_drop_count > 0
         || has_code(diagnostics, DiagnosticCode::ApuActiveNoPcm)
@@ -638,6 +667,7 @@ pub fn build_auto_diagnosis(
         });
     }
 
+    // Prioritize unsupported execution coverage, especially when it halted the run and can explain later symptoms.
     if input.unsupported_opcode_count > 0 {
         let score = if input.halted_on_unsupported_opcode {
             100
@@ -674,6 +704,7 @@ pub fn build_auto_diagnosis(
     }
 
     if let Some(reason) = stop_reason {
+        // Recognize replay divergence by the stop-kind label; this builder does not independently compare digests.
         if reason.kind.contains("divergence") {
             suspects.push(AutoDiagnosisSuspect {
                 key: "replay_generation_diverged".to_string(),
@@ -693,11 +724,13 @@ pub fn build_auto_diagnosis(
         }
     }
 
+    // Order strongest scores first, break ties by stable key and retain at most five candidates.
     suspects.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.key.cmp(&b.key)));
     let max_items = 5;
     if suspects.len() > max_items {
         suspects.truncate(max_items);
     }
+    // Build the focus list from the already truncated ranking so it matches the displayed candidates.
     let recommended_focus = suspects
         .iter()
         .map(|suspect| {
@@ -709,6 +742,7 @@ pub fn build_auto_diagnosis(
             )
         })
         .collect();
+    // These are literal guidance strings, not a live audit of referenced project files or tool availability.
     let carry_forward_notes = vec![
         "Suspects are prioritized from runtime observations and coarse heuristics; they are guides, not hardware proofs.".to_string(),
         "Past [x] items may still only mean regression/observability completion; consult docs/limited_completion_and_deferred_scope_v49.md and the latest open_remaining_issues file.".to_string(),
@@ -724,16 +758,21 @@ pub fn build_auto_diagnosis(
     }
 }
 
+// Check code presence for timing-pack gating without requiring a particular diagnostic severity.
 fn has_diag(diagnostics: &[Diagnostic], code: DiagnosticCode) -> bool {
     diagnostics.iter().any(|diag| diag.code == code)
 }
 
+// Create six subsystem summaries from the supplied evidence and diagnostic exclusions.
+// This builder emits only observation/implementation and regression-only/candidate states; it never validates hardware.
 pub fn build_timing_pack_report(
     input: DiagnosticInput,
     diagnostics: &[Diagnostic],
 ) -> TimingPackReport {
     let mut packs = Vec::new();
 
+    // Use timer or unsupported-opcode observations as CPU-path evidence and exclude selected
+    // warning codes before marking this run a candidate.
     let cpu_impl = input.timer_interrupts > 0
         || input.timer_overflows > 0
         || input.unsupported_opcode_count > 0;
@@ -775,6 +814,7 @@ pub fn build_timing_pack_report(
         ],
     });
 
+    // Require an observed render boundary, plus absence of selected timing warnings, for a PPU candidate.
     let ppu_impl = input.vblank_events > 0
         || input.scanline_event_count > 0
         || input.scanline_render_count > 0
@@ -818,6 +858,8 @@ pub fn build_timing_pack_report(
         ],
     });
 
+    // Require start/block evidence and some completion evidence for a DMA candidate.
+    // This gate checks diagnostic absence, not the actual bytes transferred.
     let dma_impl =
         input.oam_dma_start_count > 0 || input.hdma_start_count > 0 || input.hdma_block_count > 0;
     let dma_candidate = dma_impl
@@ -861,6 +903,7 @@ pub fn build_timing_pack_report(
         ],
     });
 
+    // Use observed timer/serial/joypad/service activity and exclude selected unserviced-path codes.
     let timer_irq_impl = input.timer_interrupts > 0
         || input.serial_interrupts > 0
         || input.joypad_interrupts > 0
@@ -905,6 +948,7 @@ pub fn build_timing_pack_report(
         ],
     });
 
+    // CGB mode alone qualifies as available-path evidence here; no speed-switch event is required by this gate.
     let cgb_impl = input.cgb_palette_count > 0 || !input.dmg_mode;
     let cgb_candidate = cgb_impl && !has_diag(diagnostics, DiagnosticCode::CgbPaletteUsedInDmgMode);
     packs.push(TimingPackEntry {
@@ -938,6 +982,8 @@ pub fn build_timing_pack_report(
         ],
     });
 
+    // Require PCM generation before candidate status and reject selected no-PCM/overflow diagnostics.
+    // Queue activity alone does not measure waveform fidelity.
     let apu_impl = input.apu_trigger_count > 0
         || input.apu_mix_output_count > 0
         || input.apu_pcm_frame_count > 0;
@@ -993,8 +1039,11 @@ pub fn build_timing_pack_report(
     }
 }
 
+// Append independent observation-based rules in fixed order without executing the machine.
+// Missing visible changes can be intentional; callers must interpret these hints within the sampled run window.
 pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnostic> {
     let mut out = Vec::new();
+    // Report the advertised SGB header capability without implying that SGB behavior was exercised.
     if machine.cartridge.supports_sgb() {
         out.push(Diagnostic {
             code: DiagnosticCode::SgbHeaderObservedOutOfScope,
@@ -1023,6 +1072,7 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
             ),
         });
     }
+    // This particular rule tests the entire LCDC byte for zero, not just its LCD-enable bit.
     if machine.ppu.lcdc == 0 {
         out.push(Diagnostic {
             code: DiagnosticCode::WhiteScreenLcdcOff,
@@ -1030,6 +1080,7 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
             message: "LCDC is off; display may remain blank.".into(),
         });
     }
+    // No VBlank may simply reflect a short observation window; report it as information.
     if input.vblank_events == 0 {
         out.push(Diagnostic {
             code: DiagnosticCode::WhiteScreenNoVblank,
@@ -1037,9 +1088,11 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
             message: "No VBlank observed during the current run window.".into(),
         });
     }
+    // Use a two-frame minimum for the static-frame hint; a stable image can still be intentional.
     if input.executed_frames >= 2 && !input.screen_changed && machine.ppu.lcdc & 0x80 != 0 {
         out.push(Diagnostic { code: DiagnosticCode::WhiteScreenFrameStatic, severity: Severity::Warning, message: "Frame hash did not change across the observed run window while LCDC stayed enabled.".into() });
     }
+    // Treat a repeated-PC threshold as a possible loop, not proof of deadlock.
     if input.repeated_pc_hits >= 32 {
         out.push(Diagnostic {
             code: DiagnosticCode::PcStuckLoop,
@@ -1050,6 +1103,7 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
             ),
         });
     }
+    // Compare current timer enable with observed interrupts, allowing a minimum two-frame window.
     if machine.timer.tac & 0x04 != 0 && input.executed_frames >= 2 && input.timer_interrupts == 0 {
         out.push(Diagnostic {
             code: DiagnosticCode::TimerInactive,
@@ -1059,24 +1113,32 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
                     .into(),
         });
     }
+    // A pending serial request without a completion interrupt can mean it is still waiting for a peer.
     if machine.serial.transfer_active() && input.serial_interrupts == 0 {
         out.push(Diagnostic { code: DiagnosticCode::SerialTransferNoInterrupt, severity: Severity::Info, message: "Serial transfer remained active, but no serial interrupt edge was observed in the current run window.".into() });
     }
+    // This IRQ hint specifically uses recognized input-routine hits; direct P1 reads alone do not trigger it.
     if input.input_active && input.input_path_count > 0 && input.joypad_interrupts == 0 {
         out.push(Diagnostic { code: DiagnosticCode::JoypadEdgeNoInterrupt, severity: Severity::Info, message: "Input path was active, but no joypad interrupt edge was observed in the current run window.".into() });
     }
+    // Distinguish observed blocked requests from a window containing at least one serviced interrupt.
     if input.interrupt_pending_blocked_count > 0 && input.interrupt_services == 0 {
         out.push(Diagnostic { code: DiagnosticCode::InterruptPendingButNotServiced, severity: Severity::Info, message: "Interrupts became pending but none were serviced in the current run window; IME gating or wait-loop behavior may be blocking progress.".into() });
     }
+    // Report trigger activity that produced no observed host-consumable PCM in the supplied window.
     if input.apu_trigger_count > 0 && input.apu_pcm_frame_count == 0 {
         out.push(Diagnostic { code: DiagnosticCode::ApuActiveNoPcm, severity: Severity::Info, message: "APU channel trigger activity was observed, but no PCM frames were buffered for host-side consumption in the current run window.".into() });
     }
+    // Overflow counts diagnose lost buffered frames, not necessarily an emulated sound-register fault.
     if input.apu_pcm_drop_count > 0 {
         out.push(Diagnostic { code: DiagnosticCode::ApuPcmBufferOverflow, severity: Severity::Warning, message: format!("APU PCM buffering dropped {} frame(s); bounded host-audio buffering prevented unbounded growth, but the consumer side is lagging behind.", input.apu_pcm_drop_count) });
     }
+    // Possible pop edges are derived from control transitions; audible output is not measured here.
     if input.apu_pop_risk_count > 0 {
         out.push(Diagnostic { code: DiagnosticCode::ApuPopRiskObserved, severity: Severity::Info, message: format!("Observed {} APU pop-risk edge(s) from DAC or mixer control changes; HPF smoothing is modeled coarsely, so audible spikes may still differ from hardware.", input.apu_pop_risk_count) });
     }
+    // This uses the aggregate wave-access counter; it does not independently distinguish
+    // CGB current-byte aliases from blocked DMG accesses reported by the core.
     if input.apu_wave_alias_count > 0 {
         out.push(Diagnostic { code: DiagnosticCode::ApuWaveRamAliasedWhileCh3Active, severity: Severity::Info, message: format!("Observed {} CH3 wave RAM alias access event(s) while the channel was active; CGB-style current-byte aliasing was exercised.", input.apu_wave_alias_count) });
     }
@@ -1086,21 +1148,26 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
     if machine.interrupt.has_pending() && !machine.cpu.ime {
         out.push(Diagnostic { code: DiagnosticCode::InterruptsPendingButImeOff, severity: Severity::Info, message: "Interrupt sources are pending while IME is disabled; progress may stall in wait loops.".into() });
     }
+    // Rely on the caller's bounded return/restore tracking rather than inferring call completion from the current bank alone.
     if input.far_call_count > 0 && !input.bank_restored {
         out.push(Diagnostic { code: DiagnosticCode::FarCallBankNotRestored, severity: Severity::Warning, message: format!("Observed {} far-call entr{} and at least one return remained unresolved beyond the grace period.", input.far_call_count, if input.far_call_count == 1 { "y" } else { "ies" }) });
     }
+    // Symbol-derived rendering activity and framebuffer changes are independent signals; compare both.
     if input.intrinsic_count > 0 && !input.screen_changed && machine.ppu.lcdc & 0x80 != 0 {
         out.push(Diagnostic { code: DiagnosticCode::IntrinsicNoVisibleEffect, severity: Severity::Info, message: format!("Observed {} KITAQGB intrinsic-like symbol transition(s), but the framebuffer hash did not change.", input.intrinsic_count) });
     }
     if input.settile_flush_count > 0 && !input.screen_changed && machine.ppu.lcdc & 0x80 != 0 {
         out.push(Diagnostic { code: DiagnosticCode::SetTileFlushNoVisibleEffect, severity: Severity::Warning, message: format!("Observed {} set-tile flush-like intrinsic event(s), but no visible framebuffer change followed in the run window.", input.settile_flush_count) });
     }
+    // Flag dense far-call activity only within the short-window threshold; this is a performance/flow hint.
     if input.far_call_count >= 8 && input.executed_frames <= 8 {
         out.push(Diagnostic { code: DiagnosticCode::FarCallStorm, severity: Severity::Info, message: format!("Observed {} far-call-like bank transitions in only {} frame(s); this may indicate unstable bank choreography.", input.far_call_count, input.executed_frames) });
     }
+    // Buffered tile writes can remain invisible until a later flush outside this observation window.
     if input.buffered_settile_count > 0 && input.settile_flush_count == 0 && !input.screen_changed {
         out.push(Diagnostic { code: DiagnosticCode::SetTileBufferedWithoutFlush, severity: Severity::Info, message: format!("Observed {} buffered set-tile intrinsic event(s), but no flush-like intrinsic or visible framebuffer change followed in the run window.", input.buffered_settile_count) });
     }
+    // Check CGB-oriented library activity against the caller-provided hardware-mode flag.
     if input.dmg_mode && input.cgb_settile_count > 0 {
         out.push(Diagnostic { code: DiagnosticCode::SetTile16CgbUsedInDmgMode, severity: Severity::Warning, message: format!("Observed {} CGB-oriented set-tile intrinsic event(s) while the machine is running in DMG mode.", input.cgb_settile_count) });
     }
@@ -1113,6 +1180,7 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
     if input.oam_dma_count > 0 && !input.screen_changed {
         out.push(Diagnostic { code: DiagnosticCode::OamDmaNoVisibleEffect, severity: Severity::Info, message: format!("Observed {} OAM DMA-like intrinsic event(s), but the framebuffer hash did not change in the run window.", input.oam_dma_count) });
     }
+    // A start with no OAM delta may copy identical data; this comparison alone cannot establish a failed transfer.
     if input.oam_dma_start_count > 0 && !input.oam_changed {
         out.push(Diagnostic { code: DiagnosticCode::CoreOamDmaNoOamChange, severity: Severity::Info, message: format!("Observed {} core OAM DMA start event(s), but OAM contents did not change in the run window.", input.oam_dma_start_count) });
     }
@@ -1148,9 +1216,11 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
     if input.present_path_count > 0 && !input.screen_changed {
         out.push(Diagnostic { code: DiagnosticCode::PresentPathNoVisibleEffect, severity: Severity::Warning, message: format!("Observed {} present/build-screen routine hit(s), but no visible framebuffer change followed in the run window.", input.present_path_count) });
     }
+    // Use the caller's observed ordering flag; separate hit counts do not establish which call came first.
     if input.wait_vblank_count > 0 && input.present_path_count > 0 && !input.wait_before_present {
         out.push(Diagnostic { code: DiagnosticCode::WaitVBlankPresentOrderingSuspicious, severity: Severity::Info, message: format!("Present-like path hit {} time(s) and WaitVBlank-like path hit {} time(s), but no WaitVBlank-before-Present ordering was observed in the run window.", input.present_path_count, input.wait_vblank_count) });
     }
+    // Recognize either mapped input routines or direct P1 reads when checking input-related visible effects.
     if input.input_active && has_input_sampling(&input) && !input.screen_changed {
         out.push(Diagnostic { code: DiagnosticCode::InputReadNoVisibleEffect, severity: Severity::Info, message: format!("Input mask was active and {}, but no visible framebuffer change followed in the run window.", input_sampling_clause(&input)) });
     }
@@ -1160,6 +1230,7 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
     if input.oam_transfer_count > 0 && input.present_path_count == 0 {
         out.push(Diagnostic { code: DiagnosticCode::TransferOamWithoutPresent, severity: Severity::Info, message: format!("Observed {} OAM transfer routine hit(s), but no present/build-screen path was seen in the same run window.", input.oam_transfer_count) });
     }
+    // Separate backing-memory changes from the final visible-frame digest.
     if input.vram_changed && !input.screen_changed {
         out.push(Diagnostic { code: DiagnosticCode::VramChangedButFrameStatic, severity: Severity::Info, message: "VRAM contents changed during the run window, but the final framebuffer hash stayed unchanged.".into() });
     }
@@ -1175,6 +1246,7 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
     if input.oam_transfer_count > 0 && input.oam_changed && input.visible_sprite_count == 0 {
         out.push(Diagnostic { code: DiagnosticCode::TransferOamSpriteStatic, severity: Severity::Info, message: format!("Observed {} OAM transfer routine hit(s) and OAM changed, but no visible sprite candidates remain on screen.", input.oam_transfer_count) });
     }
+    // Use nonzero slots plus the visibility estimate to suggest checking offscreen sprite placement.
     if input.oam_changed && input.visible_sprite_count == 0 && input.nonzero_oam_entries > 0 {
         out.push(Diagnostic { code: DiagnosticCode::OamChangedButSpriteStatic, severity: Severity::Info, message: format!("OAM contents changed and {} sprite slot(s) are non-zero, but no visible sprite candidates are currently on screen.", input.nonzero_oam_entries) });
     }
@@ -1191,6 +1263,7 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
             ),
         });
     }
+    // Avoid the empty-OAM hint until at least two frames of enabled-sprite observation.
     if input.sprite_enabled && input.nonzero_oam_entries == 0 && input.executed_frames >= 2 {
         out.push(Diagnostic {
             code: DiagnosticCode::SpritesEnabledButOamEmpty,
@@ -1202,6 +1275,7 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
     if input.oam_transfer_count > 0 && !input.sprite_changed {
         out.push(Diagnostic { code: DiagnosticCode::TransferOamNoSpriteChange, severity: Severity::Info, message: format!("Observed {} OAM transfer routine hit(s), but sprite-side state did not change in the run window.", input.oam_transfer_count) });
     }
+    // Check the three supplied layer-change flags together rather than equating a present call with a drawn change.
     if input.present_path_count > 0
         && !input.bg_changed
         && !input.window_changed
@@ -1209,6 +1283,7 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
     {
         out.push(Diagnostic { code: DiagnosticCode::PresentNoLayerChange, severity: Severity::Warning, message: format!("Observed {} present/build-screen routine hit(s), but BG/Window/sprite all remained unchanged in the run window.", input.present_path_count) });
     }
+    // Layer-related state hashes and visible-layer changes are intentionally separate observations.
     if input.window_hash_changed && !input.window_changed {
         out.push(Diagnostic { code: DiagnosticCode::WindowMapChangedButWindowStatic, severity: Severity::Info, message: "Window-related state changed, but the visible window layer still looks static in this run window.".into() });
     }
@@ -1218,9 +1293,11 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
     if input.oam_transfer_count > 0 && !input.sprite_hash_changed {
         out.push(Diagnostic { code: DiagnosticCode::SpriteHashStaticAfterOamTransfer, severity: Severity::Info, message: "OAM transfer path ran, but the sprite-side hash stayed unchanged in this run window.".into() });
     }
+    // Require both enough switches and a high alternation score for the repeated-thrash warning.
     if input.bank_switches >= 6 && input.bank_thrash_score >= 4 {
         out.push(Diagnostic { code: DiagnosticCode::RepeatedBankThrash, severity: Severity::Warning, message: format!("Bank switching alternated aggressively; thrash score reached {} across {} bank switch(es).", input.bank_thrash_score, input.bank_switches) });
     }
+    // Report missing scanline observations only after a full frame with LCD currently enabled.
     if input.scanline_event_count == 0 && input.executed_frames >= 1 && machine.ppu.lcdc & 0x80 != 0
     {
         out.push(Diagnostic {
@@ -1240,6 +1317,7 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
             message: "Scanlines advanced, but no scanline-render boundary was observed while LCD was enabled.".into(),
         });
     }
+    // Compare HDMA/GDMA start activity against VRAM delta without claiming a byte-for-byte transfer check.
     if input.hdma_start_count > 0 && !input.vram_changed {
         out.push(Diagnostic { code: DiagnosticCode::HdmaTransferNoVramEffect, severity: Severity::Info, message: format!("Observed {} HDMA/GDMA start event(s), but VRAM contents did not change in the run window.", input.hdma_start_count) });
     }
@@ -1249,6 +1327,7 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
     if input.hdma_ignored_write_count > 0 {
         out.push(Diagnostic { code: DiagnosticCode::HdmaControlWriteIgnored, severity: Severity::Info, message: format!("Observed {} FF55 write(s) ignored while an HBlank HDMA transfer was already active.", input.hdma_ignored_write_count) });
     }
+    // The remaining LCD/STAT/LYC rules report observed register activity, not automatically faulty writes.
     if input.lcd_toggle_count > 0 {
         out.push(Diagnostic {
             code: DiagnosticCode::LcdToggleDuringRun,
@@ -1279,6 +1358,7 @@ pub fn analyze_basic(machine: &Machine, input: DiagnosticInput) -> Vec<Diagnosti
             ),
         });
     }
+    // A missing coincidence/STAT observation is a timing-investigation hint, not a verified missing interrupt.
     if input.stat_signal_count == 0 && input.executed_frames >= 1 && machine.ppu.lcdc & 0x80 != 0 {
         out.push(Diagnostic {
             code: DiagnosticCode::StatIrqPathSuspicious,
@@ -1295,6 +1375,7 @@ mod auto_diagnosis_tests {
     use kokura_core::Machine;
 
     #[test]
+    // Check that a halted unsupported-opcode observation ranks first in the supplied synthetic evidence.
     fn auto_diagnosis_prioritizes_unsupported_opcode() {
         let mut machine = Machine::new();
         machine.ppu.lcdc = 0x91;
@@ -1318,6 +1399,7 @@ mod auto_diagnosis_tests {
     }
 
     #[test]
+    // Check that bank-switch/restore evidence creates a banking candidate.
     fn auto_diagnosis_emits_banking_suspect() {
         let machine = Machine::new();
         let diagnostics = vec![Diagnostic {
@@ -1344,6 +1426,7 @@ mod auto_diagnosis_tests {
     }
 
     #[test]
+    // Check that direct P1 reads qualify as input sampling without a recognized input routine.
     fn analyze_basic_uses_ff00_reads_for_input_visibility_diagnostics() {
         let mut machine = Machine::new();
         machine.ppu.lcdc = 0x91;
@@ -1363,6 +1446,7 @@ mod auto_diagnosis_tests {
     }
 
     #[test]
+    // Check that the candidate evidence preserves the direct P1 read count.
     fn auto_diagnosis_input_suspect_mentions_ff00_reads() {
         let machine = Machine::new();
         let diagnostics = vec![Diagnostic {
@@ -1394,6 +1478,8 @@ mod auto_diagnosis_tests {
     }
 
     #[test]
+    // Check the DMA candidate classification from injected start/completion counters and no diagnostics.
+    // This test does not execute a DMA transfer or establish hardware parity.
     fn timing_pack_report_marks_dma_candidate_when_edges_and_completion_exist() {
         let report = build_timing_pack_report(
             DiagnosticInput {
@@ -1414,6 +1500,7 @@ mod auto_diagnosis_tests {
     }
 
     #[test]
+    // Check that trigger/mixer evidence without PCM cannot promote the APU pack to candidate.
     fn timing_pack_report_keeps_apu_regression_only_when_pcm_missing() {
         let report = build_timing_pack_report(
             DiagnosticInput {

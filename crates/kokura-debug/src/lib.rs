@@ -1,8 +1,8 @@
-//! エミュレーション実行を観測・再現するためのデバッグ層。
+//! Debugging facilities for observing and reproducing emulator runs.
 //!
-//! スナップショット、ウォッチ、停止条件、イベント、診断、レポート、
-//! リプレイ、シリアルリンク実行をまとめます。ROMを動かす責務は
-//! `kokura-core` に残し、このクレートは観測結果をJSON等へ整形します。
+//! Combine snapshots, watches, stop conditions, events, diagnostics, reports,
+//! replays and serial-link execution. kokura-core runs the ROM; this crate
+//! organizes observations for JSON and other report formats.
 
 pub mod diagnostics;
 pub mod events;

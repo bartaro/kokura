@@ -3,6 +3,8 @@ use std::{fs, path::Path};
 use kokura_core::Machine;
 use kokura_debug::{LinkTopology, TimingAwareLinkRunner};
 
+// Read a whitespace-separated map, match the final column exactly and decode the
+// first column as a 16-bit hexadecimal address. A missing symbol fails this fixture.
 fn symbol_address(map_path: &Path, name: &str) -> u16 {
     let map = fs::read_to_string(map_path).expect("read LINK16 map");
     map.lines()
@@ -18,14 +20,18 @@ fn symbol_address(map_path: &Path, name: &str) -> u16 {
 }
 
 #[test]
+// Exercise cable transport cadence with two copies of the optional LINK16 ROM.
+// Missing ROM/map files return early, so a passing harness alone does not prove this test ran its scenario.
 fn link16_unified_cable_selects_roles_and_starts_transport() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../link16_sequencer/out");
     let cable_rom = root.join("link16_cable.gb");
     let cable_map = root.join("link16_cable.map");
+    // The published workspace may omit these external fixture outputs; no ROM is downloaded or built here.
     if !cable_rom.exists() || !cable_map.exists() {
         return;
     }
 
+    // Resolve current build symbols instead of hard-coding the sequencer's RAM layout.
     let applied_addr = symbol_address(&cable_map, "Link16_TransportAppliedCount");
     let playing_addr = symbol_address(&cable_map, "Link16_TransportPlaying");
     let step_frames_addr = symbol_address(&cable_map, "Link16_StepFrames");
@@ -39,6 +45,7 @@ fn link16_unified_cable_selects_roles_and_starts_transport() {
     let peer_rx_state_addr = symbol_address(&cable_map, "Link16_PeerRxState");
 
     let rom = fs::read(cable_rom).expect("read unified cable ROM");
+    // Create independent machine states while sharing identical starting program bytes.
     let mut master = Machine::new();
     master.load_rom(rom.clone()).unwrap();
     let mut peer = Machine::new();
@@ -60,6 +67,7 @@ fn link16_unified_cable_selects_roles_and_starts_transport() {
         // and one external-clock peer through the ROM's role menu.
         let master_role = frame == 20;
         let peer_role = frame == 20;
+        // Arm transport only once both links report readiness and the master's transfer state is idle.
         let ready = master.peek8(link_state_addr) == 3
             && peer.peek8(link_state_addr) == 3
             && master.peek8(peer_tx_state_addr) == 0
@@ -92,10 +100,13 @@ fn link16_unified_cable_selects_roles_and_starts_transport() {
             start_press_frames -= 1;
         }
 
+        // Capture the first observed playing frame and baseline overrun counters for later comparison.
         if start_frame.is_none() && master.peek8(playing_addr) != 0 {
             start_frame = Some(master.clocks.frames);
             overrun_at_start = Some((master.peek8(overrun_addr), peer.peek8(overrun_addr)));
         }
+        // Observe transport counter changes once per emulated frame using side-effect-free reads.
+        // Multiple updates within a frame are not individually timestamped by this test.
         let master_applied = master.peek8(applied_addr);
         if master_applied != last_master_applied {
             master_events.push(master.clocks.frames);
@@ -106,6 +117,7 @@ fn link16_unified_cable_selects_roles_and_starts_transport() {
             peer_events.push(peer.clocks.frames);
             last_peer_applied = peer_applied;
         }
+        // Bound the scenario by enough observations, start timeout or the outer 1200-frame budget.
         if master_events.len() >= 12 && peer_events.len() >= 12 {
             break;
         }
@@ -149,6 +161,7 @@ fn link16_unified_cable_selects_roles_and_starts_transport() {
         "peer did not produce enough events"
     );
     let start_frame = start_frame.expect("transport never armed");
+    // Measure startup lead from the first observed playing frame, then compare adjacent event intervals.
     let initial_lead = master_events[0].saturating_sub(start_frame);
     let master_intervals = master_events
         .windows(2)
@@ -193,6 +206,8 @@ fn link16_unified_cable_selects_roles_and_starts_transport() {
             .all(|(master_frame, peer_frame)| master_frame.abs_diff(*peer_frame) <= 1),
         "master/peer event frames diverged by more than one emulator frame"
     );
+    // Require clean late/error counters and no added overrun after playback began.
+    // These assertions cover the emulated fixture, not a physical link cable.
     assert_eq!(master.peek8(late_addr), 0);
     assert_eq!(peer.peek8(late_addr), 0);
     assert_eq!(master.peek8(error_addr), 0);

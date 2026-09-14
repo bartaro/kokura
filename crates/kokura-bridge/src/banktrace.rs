@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::symbols::SymbolTable;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Describe observed bank selections and optional symbol context; the
+// far-call flag is a naming-based suspicion rather than a confirmed call edge.
 pub struct BankTraceInfo {
     pub from_bank: u16,
     pub to_bank: u16,
@@ -11,6 +13,9 @@ pub struct BankTraceInfo {
     pub suspected_far_call: bool,
 }
 
+// Recognize thunk/far-call naming patterns without ASCII case sensitivity.
+// Exclude the matched thunk suffix ending in _main from that thunk rule;
+// other farcall/callbank patterns remain independent heuristic matches.
 fn far_like_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     (lower
@@ -22,6 +27,8 @@ fn far_like_name(name: &str) -> bool {
         || lower.contains("callbank")
 }
 
+// Use bank zero below 4000 and the selected bank at higher addresses
+// for symbol lookup. This is a bridge convention, not mapper translation.
 fn symbol_bank_for_addr(selected_bank: u16, addr: u16) -> u16 {
     if addr < 0x4000 {
         0
@@ -30,6 +37,9 @@ fn symbol_bank_for_addr(selected_bank: u16, addr: u16) -> u16 {
     }
 }
 
+// Look up containing or nearest preceding symbols at the same address
+// under both bank selections. Mark a suspected far call only when the bank
+// changes and either name matches the heuristic; no instructions are executed.
 pub fn describe_bank_switch(
     symbols: Option<&SymbolTable>,
     from_bank: u16,
@@ -71,6 +81,7 @@ mod tests {
     use super::*;
     use crate::symbols::{SymbolInfo, SymbolTable};
 
+    // Construct a synthetic ROM-function symbol with an exclusive range end.
     fn symbol(bank: u16, start: u16, end: u32, name: &str) -> SymbolInfo {
         SymbolInfo {
             bank,
@@ -84,6 +95,8 @@ mod tests {
     }
 
     #[test]
+    // Check that a lower-window bank switch resolves both names in bank zero
+    // and recognizes a generated returning thunk by its name.
     fn fixed_bank_switch_uses_bank_zero_thunk_symbol() {
         let table = SymbolTable {
             symbols: vec![symbol(0, 0x0200, 0x0240, "__kq_thunk_b3_Draw")],
@@ -96,6 +109,8 @@ mod tests {
     }
 
     #[test]
+    // Verify that an ordinary audio-function name does not make a bank
+    // transition count as a suspected far call.
     fn ordinary_audio_symbol_is_not_a_far_call() {
         let table = SymbolTable {
             symbols: vec![symbol(1, 0x4000, 0x4100, "Audio_Update")],
@@ -106,6 +121,7 @@ mod tests {
     }
 
     #[test]
+    // Verify exclusion of a generated _main thunk from returning-call inference.
     fn nonreturning_main_thunk_is_not_tracked_as_a_far_call() {
         let table = SymbolTable {
             symbols: vec![symbol(0, 0x0300, 0x0340, "__kq_thunk_b3_main")],
@@ -116,6 +132,7 @@ mod tests {
     }
 
     #[test]
+    // Recognize a generated thunk marker embedded in an internal label.
     fn generated_thunk_internal_label_is_recognized() {
         let table = SymbolTable {
             symbols: vec![symbol(

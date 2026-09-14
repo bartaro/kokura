@@ -9,6 +9,8 @@ pub struct Joypad {
 }
 
 impl Joypad {
+    // Replace the host button mask and report changes in both host input and the
+    // selected active-low P1 lines. Only a selected-line falling edge requests an interrupt.
     pub fn set_mask(&mut self, mask: u8) -> Vec<JoypadTraceEvent> {
         let old_mask = self.mask;
         let old_p1 = self.read_p1();
@@ -28,6 +30,8 @@ impl Joypad {
         trace
     }
 
+    // Store the two writable group-selection bits, recompute the visible input lines
+    // and report any resulting interrupt edge, even when the host buttons did not change.
     pub fn write_p1(&mut self, value: u8) -> Vec<JoypadTraceEvent> {
         let old_p1 = self.read_p1();
         self.p1 = 0xC0 | (value & 0x30) | 0x0F;
@@ -42,6 +46,8 @@ impl Joypad {
         trace
     }
 
+    // Combine selected direction/button groups into active-low P1 lines. Selecting
+    // both groups combines their pressed bits; unselected groups do not pull lines low.
     pub fn read_p1(&self) -> u8 {
         let select = self.p1 & 0x30;
         let mut lower = 0x0F;
@@ -76,12 +82,14 @@ impl Joypad {
         0xC0 | select | lower
     }
 
+    // Detect high-to-low transitions only in P1's four input bits.
     fn interrupt_edge(old_p1: u8, new_p1: u8) -> bool {
         ((old_p1 ^ new_p1) & old_p1 & 0x0F) != 0
     }
 }
 
 impl Default for Joypad {
+    // Initialize with no host buttons pressed and the modeled default P1 selection.
     fn default() -> Self {
         Self { mask: 0, p1: 0xCF }
     }

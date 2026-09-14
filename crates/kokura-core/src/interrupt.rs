@@ -13,18 +13,23 @@ pub struct InterruptState {
 }
 
 impl InterruptState {
+    // Latch the requested interrupt bits without changing their enable mask.
     pub fn request(&mut self, mask: u8) {
         self.iflag |= mask;
     }
 
+    // Select requested, enabled hardware interrupt sources; ignore the upper three bits.
     pub fn pending_mask(&self) -> u8 {
         self.ie & self.iflag & 0x1F
     }
 
+    // Report whether an enabled request exists. CPU IME/HALT handling is performed elsewhere.
     pub fn has_pending(&self) -> bool {
         self.pending_mask() != 0
     }
 
+    // Choose the first enabled request in hardware priority order and return its
+    // mask/vector pair without clearing the request.
     pub fn highest_priority(&self) -> Option<(u8, u16)> {
         let pending = self.pending_mask();
         if pending & INT_VBLANK != 0 {
@@ -42,6 +47,7 @@ impl InterruptState {
         }
     }
 
+    // Clear only the serviced request bits, leaving other pending interrupts intact.
     pub fn acknowledge(&mut self, mask: u8) {
         self.iflag &= !mask;
     }

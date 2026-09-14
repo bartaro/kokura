@@ -1,8 +1,8 @@
-//! LCD/PPU の状態遷移、STAT/VBlank タイミング、描画バッファを担当します。
+//! LCD/PPU state transitions, STAT/VBlank timing and frame buffers.
 //!
-//! 通常の `tick` は診断用トレースを返し、`tick_fast` は同じ状態遷移を
-//! 観測イベントなしで進めます。UI はここで生成されたグレースケールまたは
-//! CGBカラーのフレームバッファを表示します。
+//! The regular tick path returns diagnostic traces; tick_fast advances the
+//! state without observation events. Front ends display the resulting
+//! grayscale or CGB color frame buffer.
 
 pub mod regs;
 pub mod render;
@@ -17,14 +17,17 @@ const FRAME_CYCLES: u32 = CYCLES_PER_SCANLINE * TOTAL_SCANLINES as u32;
 const FRAMEBUFFER_LEN: usize = 160 * 144;
 const SCREEN_WIDTH: usize = 160;
 
+// Allocate the per-pixel background color IDs used for sprite priority decisions.
 fn default_bg_color_ids() -> Vec<u8> {
     vec![0; FRAMEBUFFER_LEN]
 }
 
+// Allocate cleared per-pixel CGB background priority flags.
 fn default_bg_priority_flags() -> Vec<u8> {
     vec![0; FRAMEBUFFER_LEN]
 }
 
+// Allocate a cleared RGB555 plane for construction or deserialization of skipped runtime data.
 fn default_color_framebuffer() -> Vec<u16> {
     vec![0; FRAMEBUFFER_LEN]
 }
@@ -32,6 +35,7 @@ fn default_color_framebuffer() -> Vec<u16> {
 mod framebuffer_serde {
     use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
 
+    // Serialize the fixed-size shade framebuffer as a sequence through its slice view.
     pub fn serialize<S>(
         framebuffer: &[u8; super::FRAMEBUFFER_LEN],
         serializer: S,
@@ -42,6 +46,7 @@ mod framebuffer_serde {
         framebuffer.as_slice().serialize(serializer)
     }
 
+    // Require exactly 160x144 shade bytes before copying the decoded sequence into the fixed array.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; super::FRAMEBUFFER_LEN], D::Error>
     where
         D: Deserializer<'de>,
@@ -102,6 +107,8 @@ pub struct Ppu {
     #[serde(with = "framebuffer_serde")]
     pub framebuffer: [u8; FRAMEBUFFER_LEN],
     #[serde(skip, default = "default_color_framebuffer")]
+    // These auxiliary planes and sprite caches are skipped by serde but preserved by Clone.
+    // A deserialized state begins with fresh planes until restoration/redrawing supplies their contents.
     pub color_framebuffer: Vec<u16>,
     #[serde(skip, default = "default_bg_color_ids")]
     pub bg_color_ids: Vec<u8>,
@@ -111,6 +118,7 @@ pub struct Ppu {
     pub scanline_sprites: Vec<(usize, [u8; 4])>,
     #[serde(default)]
     pub window_line_counter: u8,
+    // Despite the name, this stores elapsed cycles within the scanline, not within the current mode.
     pub mode_cycles: u32,
     pub frame_serial: u64,
     #[serde(skip)]
@@ -120,6 +128,8 @@ pub struct Ppu {
 }
 
 impl Ppu {
+    // Advance LCD timing at mode/line boundaries and collect observation events. The render
+    // slot holds only the last requested line in this call; callers drawing each line must use bounded ticks.
     pub fn tick(&mut self, cycles: u32) -> PpuTickResult {
         if self.lcdc & 0x80 == 0 {
             self.ly = 0;
@@ -219,6 +229,8 @@ impl Ppu {
         result
     }
 
+    // Advance the same timing boundaries without a trace vector, retaining interrupt/frame flags
+    // and the last render request. This function does not draw pixels itself.
     pub fn tick_fast(&mut self, cycles: u32) -> PpuTickFastResult {
         if self.lcdc & 0x80 == 0 {
             self.ly = 0;
@@ -284,9 +296,11 @@ impl Ppu {
         result
     }
 
+    // Return the fixed 456-dot by 154-line frame period in PPU cycles.
     pub fn frame_cycles(&self) -> u32 {
         FRAME_CYCLES
     }
+    // Bound a machine scheduling step by the next PPU boundary; disabled LCD has no scheduled event.
     pub fn cycles_until_next_event(&self) -> u32 {
         if !self.lcd_enabled() {
             return u32::MAX;
@@ -302,6 +316,7 @@ impl Ppu {
             }
         }
     }
+    // Derive mode from LCD enable, current line and elapsed line cycles, including the modeled transfer penalty.
     pub fn current_mode(&self) -> PpuMode {
         if !self.lcd_enabled() {
             PpuMode::HBlank
@@ -315,24 +330,30 @@ impl Ppu {
             PpuMode::HBlank
         }
     }
+    // Compare LY and LYC directly without changing the interrupt latch.
     pub fn stat_coincidence(&self) -> bool {
         self.ly == self.lyc
     }
+    // Combine writable interrupt-enable bits with live coincidence/mode and the fixed high bit.
     pub fn read_stat(&self) -> u8 {
         let coincidence = if self.stat_coincidence() { 0x04 } else { 0x00 };
         0x80 | (self.stat & 0x78) | coincidence | (self.current_mode() as u8)
     }
 
+    // Predict LY without applying interrupts, render requests or frame-counter changes.
     pub fn predict_ly_after_cycles(&self, cycles: u32) -> u8 {
         self.predict_state_after_cycles(cycles).0
     }
 
+    // Predict mode/coincidence using current register settings and cached timing penalties.
+    // Prediction does not rescan future OAM or apply future register writes.
     pub fn predict_stat_after_cycles(&self, cycles: u32) -> u8 {
         let (ly, mode_cycles) = self.predict_state_after_cycles(cycles);
         let coincidence = if ly == self.lyc { 0x04 } else { 0x00 };
         0x80 | (self.stat & 0x78) | coincidence | (self.mode_for_state(ly, mode_cycles) as u8)
     }
 
+    // Advance a local copy of line timing with saturation and 154-line wrapping; disabled LCD predicts zero.
     fn predict_state_after_cycles(&self, cycles: u32) -> (u8, u32) {
         if !self.lcd_enabled() {
             return (0, 0);
@@ -350,6 +371,7 @@ impl Ppu {
         (ly, mode_cycles)
     }
 
+    // Evaluate the mode at hypothetical coordinates using the current LCD configuration and penalty cache.
     fn mode_for_state(&self, ly: u8, mode_cycles: u32) -> PpuMode {
         if !self.lcd_enabled() {
             PpuMode::HBlank
@@ -364,6 +386,8 @@ impl Ppu {
         }
     }
 
+    // Repair auxiliary plane lengths and rebuild STAT/sprite timing caches after a load.
+    // This does not reconstruct skipped RGB555 or priority pixels from the saved shade framebuffer.
     pub fn restore_runtime_state(&mut self, memory: &Memory) {
         if self.color_framebuffer.len() != FRAMEBUFFER_LEN {
             self.color_framebuffer = default_color_framebuffer();
@@ -379,21 +403,27 @@ impl Ppu {
         self.refresh_stat_interrupt_line();
         self.refresh_mode3_penalty(memory.oam());
     }
+    // Block CPU VRAM access during transfer while LCD is enabled; other bus gates are handled by the machine.
     pub fn can_cpu_access_vram(&self) -> bool {
         !self.lcd_enabled() || self.current_mode() != PpuMode::Transfer
     }
+    // Allow CPU OAM access only outside OAM search/transfer, or while LCD is disabled.
     pub fn can_cpu_access_oam(&self) -> bool {
         !self.lcd_enabled() || matches!(self.current_mode(), PpuMode::HBlank | PpuMode::VBlank)
     }
+    // Read the LCD controller power bit.
     pub fn lcd_enabled(&self) -> bool {
         self.lcdc & 0x80 != 0
     }
+    // Read LCDC bit zero; this implementation also uses this gate on CGB rendering paths.
     pub fn bg_enabled(&self) -> bool {
         self.lcdc & 0x01 != 0
     }
+    // Read the OBJ display-enable bit used by normal scanline rendering.
     pub fn sprite_enabled(&self) -> bool {
         self.lcdc & 0x02 != 0
     }
+    // Select eight- or sixteen-pixel sprite height from LCDC.
     pub fn sprite_height(&self) -> usize {
         if self.lcdc & 0x04 != 0 {
             16
@@ -401,6 +431,7 @@ impl Ppu {
             8
         }
     }
+    // Return the BG map offset within VRAM, not a CPU-bus address.
     pub fn bg_map_base(&self) -> usize {
         if self.lcdc & 0x08 != 0 {
             0x1C00
@@ -408,12 +439,15 @@ impl Ppu {
             0x1800
         }
     }
+    // Select unsigned tile indexing at VRAM offset zero rather than signed indexing around offset 0x1000.
     pub fn tile_data_8000(&self) -> bool {
         self.lcdc & 0x10 != 0
     }
+    // Read the window-enable bit independently of its on-screen visibility conditions.
     pub fn window_enabled(&self) -> bool {
         self.lcdc & 0x20 != 0
     }
+    // Return the window map offset within VRAM.
     pub fn window_map_base(&self) -> usize {
         if self.lcdc & 0x40 != 0 {
             0x1C00
@@ -422,10 +456,13 @@ impl Ppu {
         }
     }
 
+    // Add modeled transfer penalties to the base endpoint at line cycle 252.
     fn mode3_end_cycles(&self, line: u8) -> u32 {
         252 + self.mode3_penalty_dots(line)
     }
 
+    // Combine BG fine scroll, visible-window startup and the cached selected-sprite penalty.
+    // The cached sprite term is applied here without a separate OBJ-enable check.
     fn mode3_penalty_dots(&self, line: u8) -> u32 {
         let mut penalty = 0u32;
         if self.bg_enabled() {
@@ -438,6 +475,7 @@ impl Ppu {
         penalty
     }
 
+    // Require BG/window enable, a visible WY, a line at or below WY and WX no greater than 166.
     fn window_visible_on_line(&self, line: u8) -> bool {
         self.bg_enabled()
             && self.window_enabled()
@@ -446,6 +484,8 @@ impl Ppu {
             && self.wx <= 166
     }
 
+    // Sort selected sprites by X then OAM index and estimate fetch stalls. Count tile
+    // startup once per map cell, plus each sprite fetch; X-zero entries use a fixed penalty.
     fn sprite_penalty_from_selected(&self, line: u8, ordered: &mut Vec<(usize, [u8; 4])>) -> u32 {
         ordered.sort_by(|(lhs_index, lhs), (rhs_index, rhs)| {
             lhs[1].cmp(&rhs[1]).then(lhs_index.cmp(rhs_index))
@@ -462,6 +502,7 @@ impl Ppu {
 
             let sx = oam_x as i16 - 8;
             let pixel_x = sx.max(0) as usize;
+            // Deduplicate map-cell addresses rather than pattern IDs; identical tile art in two cells is distinct here.
             let tile_id = self.bg_tile_id_for_pixel_for_penalty(line as usize, pixel_x);
             if !seen_tiles.contains(&tile_id) {
                 seen_tiles.push(tile_id);
@@ -473,12 +514,15 @@ impl Ppu {
         penalty
     }
 
+    // Use the live window row counter only for the current visible window line.
     fn bg_tile_id_for_pixel_for_penalty(&self, y: usize, x: usize) -> u16 {
         let window_line = (y == self.ly as usize && self.window_visible_on_line(self.ly))
             .then_some(self.window_line_counter as usize);
         self.bg_tile_id_for_pixel_with_window_line(y, x, window_line)
     }
 
+    // Return the addressed BG/window map cell offset, not the tile-pattern number stored
+    // there. Scroll wraps within the 32x32 map and the window uses its supplied row when available.
     fn bg_tile_id_for_pixel_with_window_line(
         &self,
         y: usize,
@@ -504,6 +548,8 @@ impl Ppu {
         base + tile_y * 32 + tile_x
     }
 
+    // Take the first ten vertically intersecting entries in OAM order. Offscreen X values
+    // still consume selection slots; incomplete entries and entries beyond forty are ignored.
     fn selected_sprites_on_line<'a>(&self, oam: &'a [u8], y: usize) -> Vec<(usize, &'a [u8])> {
         let height = self.sprite_height();
         let screen_y = y as i16;
@@ -520,16 +566,20 @@ impl Ppu {
         visible
     }
 
+    // Redraw the full visible area using the DMG palette path.
     pub fn render_visible_area_from_memory(&mut self, memory: &Memory) {
         self.render_visible_area_from_memory_with_mode(memory, false);
     }
 
+    // Redraw 144 lines from current memory/registers without advancing LCD clocks.
+    // This is a static redraw, not a reconstruction of mid-frame register changes.
     pub fn render_visible_area_from_memory_with_mode(&mut self, memory: &Memory, cgb_mode: bool) {
         for y in 0..VISIBLE_SCANLINES as usize {
             self.render_scanline_from_memory_with_mode(memory, y, cgb_mode);
         }
     }
 
+    // Clear selection outside active display or relatch current-line OAM and its timing estimate.
     pub fn refresh_mode3_penalty(&mut self, oam: &[u8]) {
         if !self.lcd_enabled() || self.ly >= VISIBLE_SCANLINES {
             self.scanline_sprites.clear();
@@ -539,6 +589,8 @@ impl Ppu {
         self.latch_scanline_state(oam);
     }
 
+    // Copy the current line's first ten selected OAM entries and compute their fetch penalty.
+    // Selection itself is not gated by the OBJ display-enable bit.
     pub fn latch_scanline_state(&mut self, oam: &[u8]) {
         if !self.lcd_enabled() || self.ly >= VISIBLE_SCANLINES {
             self.scanline_sprites.clear();
@@ -555,10 +607,13 @@ impl Ppu {
         self.scanline_sprites = selected;
     }
 
+    // Redraw one requested visible line through the DMG path.
     pub fn render_scanline_from_memory(&mut self, memory: &Memory, y: usize) {
         self.render_scanline_from_memory_with_mode(memory, y, false);
     }
 
+    // Draw one bounded line using current memory and freshly selected sprites. This path
+    // uses geometric window rows and does not advance the live window-line counter.
     pub fn render_scanline_from_memory_with_mode(
         &mut self,
         memory: &Memory,
@@ -583,10 +638,13 @@ impl Ppu {
         }
     }
 
+    // Draw the current live scanline through the DMG path and advance its window progress when visible.
     pub fn render_current_scanline_from_memory(&mut self, memory: &Memory) {
         self.render_current_scanline_from_memory_with_mode(memory, false);
     }
 
+    // Draw current LY using the live window row and latched sprite list. Repeated calls
+    // for the same visible window line will each advance the window counter.
     pub fn render_current_scanline_from_memory_with_mode(
         &mut self,
         memory: &Memory,
@@ -613,6 +671,8 @@ impl Ppu {
         }
     }
 
+    // Count entries whose bounding boxes intersect the display; this estimate ignores
+    // per-line selection, transparency and priority, and scans all complete supplied entries.
     pub fn visible_sprite_count_estimate(&self, oam: &[u8]) -> u32 {
         let h = self.sprite_height() as i16;
         let mut count = 0u32;
@@ -626,12 +686,15 @@ impl Ppu {
         count
     }
 
+    // Count complete entries containing any nonzero byte, independently of actual visibility.
     pub fn nonzero_oam_entries(&self, oam: &[u8]) -> u32 {
         oam.chunks_exact(4)
             .filter(|c| c.iter().any(|&b| b != 0))
             .count() as u32
     }
 
+    // Reset timing/window/selection on LCD transitions and clear pixel planes on disable.
+    // Return whether the resulting combined STAT line acquired a rising edge.
     pub fn write_lcdc(&mut self, value: u8) -> bool {
         let was_enabled = self.lcd_enabled();
         self.lcdc = value;
@@ -655,16 +718,19 @@ impl Ppu {
         self.refresh_stat_interrupt_line()
     }
 
+    // Apply only writable STAT interrupt-enable bits, then recompute the combined interrupt edge.
     pub fn write_stat(&mut self, value: u8) -> bool {
         self.stat = (self.stat & 0x87) | (value & 0x78);
         self.refresh_stat_interrupt_line()
     }
 
+    // Store the comparison line and immediately reevaluate coincidence and the STAT interrupt edge.
     pub fn write_lyc(&mut self, value: u8) -> bool {
         self.lyc = value;
         self.refresh_stat_interrupt_line()
     }
 
+    // Refresh cached coincidence/mode bits while retaining the register's other fields.
     fn update_stat(&mut self) {
         let coincidence = self.ly == self.lyc;
         if coincidence {
@@ -675,6 +741,7 @@ impl Ppu {
         self.stat = (self.stat & !0x03) | (self.current_mode() as u8);
     }
 
+    // OR the enabled coincidence and current-mode sources; LCD-off forces the combined signal low.
     fn stat_interrupt_selected(&self) -> bool {
         if !self.lcd_enabled() {
             return false;
@@ -689,6 +756,8 @@ impl Ppu {
         coincidence_selected || mode_selected
     }
 
+    // Latch the combined STAT signal and report only a low-to-high transition.
+    // Switching between asserted sources does not create another edge.
     fn refresh_stat_interrupt_line(&mut self) -> bool {
         let old_line = self.stat_interrupt_line;
         self.update_stat();
@@ -696,6 +765,8 @@ impl Ppu {
         !old_line && self.stat_interrupt_line
     }
 
+    // Compose BG/window pixels from tile maps and two-bit tile rows, recording both
+    // raw color IDs/priority and shade/RGB555 output. Callers supply a visible line and sized output planes.
     fn render_scanline_from_vram_with_mode(
         &mut self,
         y: usize,
@@ -706,6 +777,7 @@ impl Ppu {
         window_line: Option<usize>,
     ) {
         let base = y * SCREEN_WIDTH;
+        // The current implementation clears BG/window output on LCDC bit zero for both hardware modes.
         if !self.bg_enabled() {
             for x in 0..SCREEN_WIDTH {
                 self.bg_color_ids[base + x] = 0;
@@ -737,6 +809,7 @@ impl Ppu {
             let tile_x = (px / 8) & 0x1F;
             let tile_y = (py / 8) & 0x1F;
             let map_index = map_base + tile_y * 32 + tile_x;
+            // Read tile numbers from bank zero and CGB attributes from bank one; absent bytes default to zero.
             let tile_number = vram0.get(map_index).copied().unwrap_or(0);
             let attr = if cgb_mode {
                 vram1.get(map_index).copied().unwrap_or(0)
@@ -765,6 +838,7 @@ impl Ppu {
             let tile_addr = if tile_data_8000 {
                 tile_number as usize * 16
             } else {
+                // Signed indexing is centered at CPU address 0x9000, which is offset 0x1000 within VRAM.
                 let signed_index = tile_number as i8 as i16;
                 (0x1000i32 + signed_index as i32 * 16) as usize
             };
@@ -789,6 +863,8 @@ impl Ppu {
     }
 
     #[allow(dead_code, unused_variables)]
+    // Unused placeholder: computes some clipped sprite coordinates but reads no tile pixels
+    // and changes no framebuffer. Actual overlays use the VRAM-aware helpers below.
     fn overlay_sprites(&mut self, oam: &[u8]) {
         let height = self.sprite_height();
         for chunk in oam.chunks_exact(4).take(40) {
@@ -820,15 +896,18 @@ impl Ppu {
                 let _ = lo;
             }
         }
-        // second pass actually reads from framebuffer using VRAM fetched via render_scanline; sprite drawing is approximated in render_visible_area_from_memory_ext below.
+        // No drawing occurs in this placeholder; the VRAM-aware overlay methods perform composition.
     }
 
+    // Overlay DMG sprites over every visible line using the supplied VRAM and OAM.
+    // This direct helper does not check the LCDC OBJ-enable bit.
     pub fn overlay_sprites_with_vram(&mut self, vram: &[u8], oam: &[u8]) {
         for y in 0..VISIBLE_SCANLINES as usize {
             self.overlay_sprites_on_scanline_with_vram(vram, oam, y);
         }
     }
 
+    // Use one VRAM bank and default palette memory for the DMG-only overlay adapter.
     fn overlay_sprites_on_scanline_with_vram(&mut self, vram: &[u8], oam: &[u8], y: usize) {
         self.overlay_sprites_on_scanline_with_vram_mode(
             vram,
@@ -840,6 +919,7 @@ impl Ppu {
         );
     }
 
+    // Select and copy up to ten entries from the supplied OAM before compositing one line.
     fn overlay_sprites_on_scanline_with_vram_mode(
         &mut self,
         vram0: &[u8],
@@ -859,6 +939,7 @@ impl Ppu {
         );
     }
 
+    // Composite a copy of the previously latched list so current OAM changes cannot alter this selection.
     fn overlay_latched_sprites_on_scanline_with_vram_mode(
         &mut self,
         vram0: &[u8],
@@ -873,6 +954,8 @@ impl Ppu {
         );
     }
 
+    // Draw selected sprites in reverse X/index order so lower-X/index pixels overwrite
+    // others. This same ordering is currently used for DMG and CGB; selection must intersect y.
     fn overlay_sprite_list_on_scanline_with_vram_mode(
         &mut self,
         vram0: &[u8],
@@ -917,6 +1000,7 @@ impl Ppu {
             } else {
                 sprite_row
             };
+            // In 8x16 mode, clear the pattern low bit and let the row offset address either tile of the pair.
             let tile_index = if height == 16 { tile & 0xFE } else { tile };
             let tile_addr = tile_index as usize * 16 + tile_y * 2;
             let lo = tile_bank.get(tile_addr).copied().unwrap_or(0);
@@ -932,6 +1016,8 @@ impl Ppu {
                     continue;
                 }
                 let idx = y * SCREEN_WIDTH + screen_x as usize;
+                // Test the original BG color ID before palette mapping. A displayed shade of zero
+                // is not sufficient to make an otherwise nonzero BG pixel transparent to OBJ.
                 let bg_blocks_obj = self.bg_priority_flags[idx] != 0 && self.bg_color_ids[idx] != 0;
                 if bg_blocks_obj || (priority_behind_bg && self.bg_color_ids[idx] != 0) {
                     continue;
@@ -949,10 +1035,12 @@ impl Ppu {
         }
     }
 
+    // Map a two-bit DMG color ID through its packed two-bit palette entry.
     fn apply_palette(palette: u8, color_id: u8) -> u8 {
         (palette >> (color_id * 2)) & 0x03
     }
 
+    // Reduce RGB555 to a 0..31 weighted brightness using red/green/blue weights 3:6:1.
     fn apply_cgb_palette(rgb555: u16) -> u8 {
         let r = (rgb555 & 0x1F) as u32;
         let g = ((rgb555 >> 5) & 0x1F) as u32;
@@ -960,6 +1048,7 @@ impl Ppu {
         (((r * 3) + (g * 6) + b) / 10) as u8
     }
 
+    // Map a clamped four-shade DMG index to neutral RGB555 display colors.
     fn dmg_gray_rgb555(gray: u8) -> u16 {
         const DMG_SHADES: [u16; 4] = [
             0x7FFF, // white
@@ -972,6 +1061,7 @@ impl Ppu {
 }
 
 impl Default for Ppu {
+    // Create the initial LCD register model with cleared output/caches and no elapsed frame timing.
     fn default() -> Self {
         Self {
             lcdc: 0x91,
@@ -1005,6 +1095,7 @@ mod tests {
     use crate::memory::Memory;
 
     #[test]
+    // Check the render request when a small tick crosses the transfer-to-HBlank boundary.
     fn transfer_to_hblank_requests_scanline_render() {
         let mut ppu = Ppu::default();
         ppu.lcdc = 0x91;
@@ -1018,6 +1109,7 @@ mod tests {
     }
 
     #[test]
+    // Check the seven-dot fine-scroll penalty against the base transfer endpoint.
     fn scx_penalty_delays_transfer_end() {
         let mut ppu = Ppu::default();
         ppu.lcdc = 0x91;
@@ -1035,6 +1127,7 @@ mod tests {
     }
 
     #[test]
+    // Check the modeled six-dot window penalty on a visible window line.
     fn window_penalty_delays_transfer_end() {
         let mut ppu = Ppu::default();
         ppu.lcdc = 0xB1;
@@ -1054,6 +1147,7 @@ mod tests {
     }
 
     #[test]
+    // Check the modeled transfer delay from one selected sprite at the left edge.
     fn sprite_penalty_delays_transfer_end() {
         let mut ppu = Ppu::default();
         let mut memory = Memory::default();
@@ -1076,6 +1170,7 @@ mod tests {
     }
 
     #[test]
+    // Check that the eleventh vertically selected sprite adds no penalty in this fixture.
     fn only_first_ten_selected_sprites_contribute_to_mode3_penalty() {
         let mut ppu = Ppu::default();
         let mut memory = Memory::default();
@@ -1095,6 +1190,7 @@ mod tests {
     }
 
     #[test]
+    // Map a nonzero BG color ID to shade zero and verify it still blocks a behind-BG sprite.
     fn sprite_priority_uses_bg_color_id_not_palette_output() {
         let mut ppu = Ppu::default();
         let mut memory = Memory::default();
@@ -1120,6 +1216,7 @@ mod tests {
     }
 
     #[test]
+    // Use ten offscreen-X entries to exhaust selection before an eleventh drawable sprite.
     fn only_first_ten_sprites_on_a_scanline_are_drawn() {
         let mut ppu = Ppu::default();
         let mut memory = Memory::default();
@@ -1146,6 +1243,7 @@ mod tests {
     }
 
     #[test]
+    // Check representative cleared buffers, selected sprites, window progress and LY on LCD disable.
     fn lcd_disable_clears_scanline_buffers() {
         let mut ppu = Ppu::default();
         ppu.framebuffer[0] = 3;
@@ -1163,6 +1261,7 @@ mod tests {
     }
 
     #[test]
+    // Disable the window for one line and verify its source-row counter resumes without consuming that line.
     fn window_line_counter_only_advances_when_window_draws() {
         let mut ppu = Ppu::default();
         let mut memory = Memory::default();
@@ -1197,6 +1296,7 @@ mod tests {
     }
 
     #[test]
+    // Check this model's BG-enable gate for window visibility and timing penalty.
     fn window_is_not_visible_when_bg_is_disabled() {
         let mut ppu = Ppu::default();
         ppu.lcdc = 0xA0;
@@ -1208,6 +1308,7 @@ mod tests {
     }
 
     #[test]
+    // Compare predicted LY with a cloned PPU advanced across one scanline boundary.
     fn predicted_ff44_matches_tick_near_scanline_boundary() {
         let mut ppu = Ppu::default();
         ppu.lcdc = 0x91;
@@ -1221,6 +1322,7 @@ mod tests {
     }
 
     #[test]
+    // Compare predicted STAT with a cloned PPU advanced from OAM search to transfer.
     fn predicted_ff41_matches_tick_across_mode_boundary() {
         let mut ppu = Ppu::default();
         ppu.lcdc = 0x91;

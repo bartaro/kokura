@@ -2,6 +2,8 @@ use std::{env, error::Error, fs, path::PathBuf, time::Instant};
 
 use kokura_core::{types::HardwareMode, Machine};
 
+// Map one trimmed, case-insensitive button name to its host input bit.
+// Combined-button expressions are not supported by this parser.
 fn parse_button_mask(name: &str) -> Result<u8, Box<dyn Error>> {
     match name.trim().to_ascii_uppercase().as_str() {
         "RIGHT" => Ok(0x01),
@@ -16,6 +18,9 @@ fn parse_button_mask(name: &str) -> Result<u8, Box<dyn Error>> {
     }
 }
 
+// Expand semicolon-separated NAME:COUNT runs into one mask per frame.
+// NONE produces released input; empty chunks are skipped and the requested
+// counts allocate the complete sequence in memory before emulation.
 fn parse_input_seq(spec: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut out = Vec::new();
     for chunk in spec.split(';') {
@@ -37,6 +42,9 @@ fn parse_input_seq(spec: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     Ok(out)
 }
 
+// Load a requested hardware mode, run the frame/input workload and
+// optionally drain audio each frame, then report elapsed time and buffer
+// drops. Timing excludes ROM loading but includes input updates and draining.
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = env::args().skip(1);
     let rom = args
@@ -67,6 +75,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let _ = machine.set_audio_buffer_capacity_frames(65_536);
 
     let started = Instant::now();
+    // Apply input directly to Joypad and discard its edge records; this
+    // probe does not route those records through a machine-level input API.
     for frame_idx in 0..frames {
         let _ = machine
             .joypad
@@ -79,10 +89,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
+    // The printed mode is the requested setting, so auto remains auto
+    // instead of reporting the resolved hardware mode.
     let elapsed = started.elapsed();
     let fps = frames as f64 / elapsed.as_secs_f64();
     println!(
         "{{\"rom\":\"{}\",\"frames\":{},\"mode\":\"{}\",\"drain_audio\":{},\"ms\":{:.1},\"fps\":{:.2},\"pc\":\"0x{:04X}\",\"rom_bank\":{},\"audio_frames_dropped\":{}}}",
+        // The surrounding output resembles JSON, but this interpolated path
+        // is not JSON-escaped; backslashes or quotes can make it invalid JSON.
         rom.display(),
         frames,
         match mode {

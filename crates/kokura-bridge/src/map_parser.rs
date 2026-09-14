@@ -2,6 +2,9 @@ use std::{fs, path::Path};
 
 use crate::symbols::{SymbolInfo, SymbolTable};
 
+// Read six-or-more columns as hex CPU address, decimal bank, offset,
+// S/L kind, region and joined symbol name. Ignore the offset column and
+// malformed/other-kind rows; initialize a one-byte symbol span.
 fn parse_kitaqgb_columnar(parts: &[&str], table: &mut SymbolTable) {
     if parts.len() < 6 {
         return;
@@ -25,6 +28,9 @@ fn parse_kitaqgb_columnar(parts: &[&str], table: &mut SymbolTable) {
     }
 }
 
+// Parse hexadecimal bank:address from a nonempty token list. Skip an
+// optional second token that looks like hex before joining the remaining
+// name; consequently a hex-only symbol token can be treated as a number.
 fn parse_bank_addr_form(parts: &[&str], table: &mut SymbolTable) {
     if let Some((bank_hex, addr_hex)) = parts[0].split_once(':') {
         if let (Ok(bank), Ok(start)) = (
@@ -53,6 +59,9 @@ fn parse_bank_addr_form(parts: &[&str], table: &mut SymbolTable) {
     }
 }
 
+// Ignore blank/comment lines, parse recognized columnar or bank:address
+// rows, then sort by bank/start and infer exclusive ends from the next
+// symbol. The final symbol in each bank extends to address 10000.
 pub fn parse_map_text(text: &str) -> SymbolTable {
     let mut table = SymbolTable::default();
     for line in text.lines() {
@@ -81,6 +90,8 @@ pub fn parse_map_text(text: &str) -> SymbolTable {
     }
 
     table.symbols.sort_by_key(|s| (s.bank, s.start));
+    // Keep every span at least one byte even for duplicate starts. Inferred
+    // ends do not prove that the entire range contains the named function.
     for i in 0..table.symbols.len() {
         if i + 1 < table.symbols.len() && table.symbols[i].bank == table.symbols[i + 1].bank {
             let next = table.symbols[i + 1].start;
@@ -93,6 +104,8 @@ pub fn parse_map_text(text: &str) -> SymbolTable {
     table
 }
 
+// Read a UTF-8 map file and return the permissively parsed symbol table;
+// malformed rows are skipped by the text parser rather than reported as errors.
 pub fn parse_map_file<P: AsRef<Path>>(path: P) -> std::io::Result<SymbolTable> {
     let text = fs::read_to_string(path)?;
     Ok(parse_map_text(&text))
@@ -103,13 +116,14 @@ mod tests {
     use super::*;
 
     #[test]
+    // Check that a columnar fixture separates symbol name, kind and region.
     fn kitaqgb_columnar_map_keeps_region_out_of_symbol_name() {
         let table = parse_map_text(
             "; Addr(CPU) Bank Off Kind Region Name\n\
-             06E3 0 06E3 S ROM __kq_thunk_b4_HM_MusicPump\n",
+             0200 0 0200 S ROM __kq_thunk_b2_Draw\n",
         );
-        let symbol = table.lookup(0, 0x06E3).expect("parsed thunk symbol");
-        assert_eq!(symbol.name, "__kq_thunk_b4_HM_MusicPump");
+        let symbol = table.lookup(0, 0x0200).expect("parsed thunk symbol");
+        assert_eq!(symbol.name, "__kq_thunk_b2_Draw");
         assert_eq!(symbol.kind.as_deref(), Some("S"));
         assert_eq!(symbol.region.as_deref(), Some("ROM"));
     }

@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::mbc::read_rom_bank;
 
+// Read whole host-wall-clock seconds, falling back to zero before
+// the Unix epoch rather than using emulation cycles.
 fn unix_now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -11,6 +13,8 @@ fn unix_now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+// Pack a value in the caller-expected 0-99 range as decimal tens/units
+// nibbles; the helper does not clamp arbitrary inputs.
 fn to_bcd(value: u8) -> u8 {
     ((value / 10) << 4) | (value % 10)
 }
@@ -26,6 +30,8 @@ pub struct Tama5 {
 }
 
 impl Default for Tama5 {
+    // Select ROM one, disable the register window, allocate zeroed registers
+    // and RTC latches, and record the current host second without capturing it.
     fn default() -> Self {
         Self {
             rom_bank: 1,
@@ -39,6 +45,7 @@ impl Default for Tama5 {
 }
 
 impl Tama5 {
+    // Mask the seven-bit ROM selector and map zero to bank one.
     pub fn current_rom_bank(&self) -> u16 {
         let bank = self.rom_bank & 0x7F;
         if bank == 0 {
@@ -48,10 +55,12 @@ impl Tama5 {
         }
     }
 
+    // Report bank zero; this model exposes registers rather than banked RAM.
     pub fn current_ram_bank(&self) -> u16 {
         0
     }
 
+    // Read fixed lower ROM and wrapped selected upper ROM in 16 KiB units.
     pub fn read_rom(&self, rom: &[u8], addr: u16) -> u8 {
         match addr {
             0x0000..=0x3FFF => rom.get(addr as usize).copied().unwrap_or(0xFF),
@@ -63,6 +72,8 @@ impl Tama5 {
         }
     }
 
+    // When enabled, read the selected RTC latch or register independently
+    // of the CPU address and supplied RAM backing; disabled reads return FF.
     pub fn read_ram(&self, _ram: &[u8], _addr: u16) -> u8 {
         if !self.ram_enabled {
             return 0xFF;
@@ -77,6 +88,9 @@ impl Tama5 {
         }
     }
 
+    // When enabled, update low/high ROM bits, request a host-time latch,
+    // write an RTC latch byte or store another register. The supplied external
+    // RAM/address are unused; direct latch writes do not set the host clock.
     pub fn write_ram(&mut self, _ram: &mut [u8], _addr: u16, value: u8) {
         if !self.ram_enabled {
             return;
@@ -101,6 +115,8 @@ impl Tama5 {
         }
     }
 
+    // Decode window enable, direct ROM-bank selection and a five-bit register
+    // selector. This path does not itself refresh the RTC latch.
     pub fn write(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x1FFF => self.ram_enabled = (value & 0x0F) == 0x0A,
@@ -113,6 +129,8 @@ impl Tama5 {
         }
     }
 
+    // Refresh the RTC latch when the host timestamp changes, including a
+    // backward change. A tick in the construction second can leave latches zero.
     pub fn tick(&mut self, _cycles: u32) {
         let now = unix_now_secs();
         if now != self.rtc_last_timestamp_secs {
@@ -121,6 +139,9 @@ impl Tama5 {
         }
     }
 
+    // Derive BCD second/minute/hour, epoch-day modulo 100 and weekday from
+    // Unix time, then append ROM selector pieces. The day byte is not a
+    // calendar day-of-month, and no month/year conversion is performed.
     fn latch_rtc_snapshot(&mut self) {
         let now = unix_now_secs();
         let second = (now % 60) as u8;
@@ -145,6 +166,8 @@ mod tests {
     use super::*;
 
     #[test]
+    // Check low/high selector writes through the enabled register window
+    // combine into ROM bank 25 hex.
     fn register_writes_can_rebuild_rom_bank() {
         let mut tama5 = Tama5::default();
         tama5.ram_enabled = true;
@@ -158,6 +181,8 @@ mod tests {
     }
 
     #[test]
+    // Check that the first RTC read is not FF. A zero-initialized latch also
+    // passes, so this test does not prove that host time was freshly captured.
     fn rtc_latch_registers_are_populated() {
         let mut tama5 = Tama5::default();
         tama5.tick(0);

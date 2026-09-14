@@ -20,6 +20,7 @@ pub struct AutoLabel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Keep unresolved destination banks explicit; confidence strings describe static evidence strength.
 pub struct XrefInfo {
     pub from_bank: u16,
     pub from_addr: u16,
@@ -31,6 +32,7 @@ pub struct XrefInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Describe a candidate data interval with an exclusive end address.
 pub struct DataRangeInfo {
     pub bank: u16,
     pub start: u16,
@@ -46,6 +48,7 @@ pub struct SwitchCaseInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Retain the inferred table location and decoded target candidates separately from the jump site.
 pub struct SwitchCandidateInfo {
     pub table_bank: u16,
     pub table_addr: u16,
@@ -55,6 +58,7 @@ pub struct SwitchCandidateInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Separate available bytes from text, target and control-flow metadata for one decoded start.
 pub struct DecodedInstruction {
     pub bank: u16,
     pub addr: u16,
@@ -73,6 +77,7 @@ pub struct DecodedInstruction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Store half-open address bounds and local graph edges; role strings are inferred structure hints.
 pub struct DecompileBasicBlockInfo {
     pub id: String,
     pub start_address: u16,
@@ -87,6 +92,7 @@ pub struct DecompileBasicBlockInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+// Bundle static presentation with optional trace overlays and explicit warnings/candidate evidence.
 pub struct DecompileArtifact {
     pub function_id: String,
     pub disassembly_text: String,
@@ -110,6 +116,7 @@ pub struct DecompileArtifact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+// Keep a stable ID/canonical name alongside editable presentation and inferred per-function analysis.
 pub struct DecompileFunctionInfo {
     pub id: String,
     pub bank: u16,
@@ -134,6 +141,7 @@ pub struct DecompileFunctionInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+// Report analysis of the supplied bytes; title and mapper fields come from that input ROM header.
 pub struct DecompileReport {
     pub schema_version: &'static str,
     pub rom_size_bytes: u32,
@@ -150,6 +158,7 @@ pub struct DecompileReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Record a candidate SP-relative variable, static access counts and optional supplied trace evidence.
 pub struct DecompileStackSlotHint {
     pub offset: i16,
     pub name: String,
@@ -175,6 +184,7 @@ pub struct DecompileStackSlotHint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Describe a register spill candidate, not a reconstructed source-language local variable.
 pub struct DecompileTempSlotHint {
     pub name: String,
     pub kind: String,
@@ -195,6 +205,7 @@ pub struct DecompileTempSlotHint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Keep static setup guesses separate from values observed at a call PC; neither establishes a signature.
 pub struct DecompileCallSiteHint {
     pub call_bank: u16,
     pub call_addr: u16,
@@ -215,6 +226,7 @@ pub struct DecompileCallSiteHint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Accept caller-supplied runtime evidence. Frame/PC/slot values are not collected or verified by this type.
 pub struct DecompileTraceObservation {
     #[serde(default)]
     pub completed_frames: Option<u64>,
@@ -244,6 +256,7 @@ pub struct DecompileTraceObservation {
     pub sp: Option<u16>,
 }
 
+// Treat a missing serialized hit count as one observation.
 fn default_trace_observation_hit_count() -> u64 {
     1
 }
@@ -260,6 +273,7 @@ pub struct DecompileTracePcHit {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+// Summarize matched observations with bounded previews rather than storing a complete execution trace.
 pub struct DecompileTraceSummary {
     pub hit_count: u64,
     #[serde(default)]
@@ -283,11 +297,14 @@ pub struct DecompileTraceSummary {
 }
 
 #[derive(Debug, Clone, Default)]
+// Select reported roots after discovery; recovery may also append plausible callees outside that selection.
 pub struct DecompileOptions {
     pub selected_functions: Vec<String>,
     pub include_all_named_functions: bool,
 }
 
+// Decode sequentially within a validated inclusive address range, stopping on empty bytes
+// or address overflow. The final instruction may extend beyond the requested end address.
 pub fn disassemble_range(
     rom: &[u8],
     bank: u16,
@@ -343,6 +360,7 @@ pub struct DecompileLabelOverride {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+// Deserialize editable names/notes independently of instruction decoding; schema validation is external.
 pub struct DecompileAnnotationFile {
     #[serde(default = "default_decompile_annotation_schema_version")]
     pub schema_version: String,
@@ -360,6 +378,7 @@ struct PseudocodeContext {
 }
 
 #[derive(Debug, Clone, Default)]
+// Track only a tentative HL-to-SP offset alias for text rendering and pattern scans.
 struct BlockRenderState {
     hl_stack_alias: Option<i16>,
 }
@@ -390,10 +409,12 @@ struct ControlFlowHints {
     continue_blocks: BTreeSet<usize>,
 }
 
+// Supply the default annotation format identifier when deserializing an omitted field.
 fn default_decompile_annotation_schema_version() -> String {
     "decompile_annotation_v1".to_string()
 }
 
+// Classify a label override as user-authored unless its serialized kind says otherwise.
 fn default_user_label_kind() -> String {
     "user".to_string()
 }
@@ -458,6 +479,7 @@ enum WindowKind {
 }
 
 impl WindowKind {
+    // Test only fixed versus switchable CPU-address bounds, independently of ROM length.
     fn contains(self, addr: u16) -> bool {
         match self {
             Self::Fixed => addr <= FIXED_BANK_END,
@@ -466,6 +488,9 @@ impl WindowKind {
     }
 }
 
+// Discover bank/address roots from metadata, vectors and selectors, follow resolvable calls,
+// and build static code/data, CFG and pseudocode reports. Bank assumptions and semantic
+// patterns are heuristics; this function does not execute the ROM or recover original source.
 pub fn analyze_rom(
     rom: &[u8],
     symbol_table: Option<&SymbolTable>,
@@ -509,6 +534,7 @@ pub fn analyze_rom(
         }
     }
 
+    // Begin with a deterministic sorted root queue; discoveries append new targets and do not reanalyze older roots.
     let named_roots: Vec<(u16, u16)> = roots.iter().copied().collect();
     let mut pending: VecDeque<(u16, u16)> = named_roots.into_iter().collect();
     let mut analyzed: BTreeMap<(u16, u16), FunctionAnalysis> = BTreeMap::new();
@@ -606,6 +632,7 @@ pub fn analyze_rom(
             .collect()
     };
 
+    // Retain global evidence before output selection so unselected callers can still contribute incoming references.
     let global_xrefs = collect_global_xrefs(&all_functions);
     let data_ranges = classify_data_ranges(rom, rom_bank_count, &all_functions);
     for data in &data_ranges {
@@ -683,6 +710,7 @@ pub fn analyze_rom(
         });
     }
 
+    // This second recovery pass operates after selection and can add plausible referenced callees to the output.
     let existing_function_keys = report_functions
         .iter()
         .map(|function| (function.bank, function.start_address))
@@ -769,6 +797,7 @@ pub fn analyze_rom(
     report_functions.sort_by_key(|function| (function.bank, function.start_address));
 
     let title = if rom.len() >= 0x144 {
+        // Read the full legacy title span from the supplied image; it includes byte 143 used by CGB headers.
         let raw = &rom[0x134..0x144];
         let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
         let text = String::from_utf8_lossy(&raw[..end]).trim().to_string();
@@ -792,6 +821,9 @@ pub fn analyze_rom(
     }
 }
 
+// Apply ordered function/label overrides and unique notes, returning the number of changed
+// fields or added entries. Preserve canonical names and previously rendered artifact text;
+// this helper does not validate the schema identifier or regenerate disassembly/pseudocode.
 pub fn apply_annotations(
     report: &mut DecompileReport,
     annotations: &DecompileAnnotationFile,
@@ -859,6 +891,8 @@ pub fn apply_annotations(
     applied
 }
 
+// Try at most four expansion rounds. Calls seed candidates immediately; jumps require
+// two incoming references and an entry-like byte pattern before overlap/validity screening.
 fn promote_recovered_functions(
     rom: &[u8],
     rom_bank_count: u16,
@@ -874,6 +908,7 @@ fn promote_recovered_functions(
                 .flat_map(|analysis| analysis.xrefs_out.iter().cloned())
                 .collect::<Vec<_>>(),
         );
+        // Each expansion round compares candidates with this snapshot; new candidates from the same round are not added here.
         let existing_ranges = analyzed
             .values()
             .map(|analysis| FunctionRange {
@@ -965,6 +1000,7 @@ fn promote_recovered_functions(
     }
 }
 
+// Count supplied references per resolved destination, regardless of reference kind.
 fn collect_incoming_xref_counts(xrefs: &[XrefInfo]) -> BTreeMap<(u16, u16), u32> {
     let mut counts = BTreeMap::new();
     for xref in xrefs {
@@ -976,6 +1012,7 @@ fn collect_incoming_xref_counts(xrefs: &[XrefInfo]) -> BTreeMap<(u16, u16), u32>
     counts
 }
 
+// Return the maximum decoded instruction end, exclusive, saturating at the address limit.
 fn function_analysis_end(function: &FunctionAnalysis) -> u16 {
     function
         .instructions
@@ -985,6 +1022,8 @@ fn function_analysis_end(function: &FunctionAnalysis) -> u16 {
         .unwrap_or(function.start)
 }
 
+// Reject empty, overlapping or invalid-heavy candidates; require an incoming reference
+// and either a terminal instruction or an entry-like first byte. This is a boundary heuristic.
 fn should_promote_recovered_function(
     analysis: &FunctionAnalysis,
     existing_ranges: &[FunctionRange],
@@ -1034,6 +1073,7 @@ fn should_promote_recovered_function(
     incoming >= 1 && (has_terminal || looks_like_function_entry_placeholder(analysis))
 }
 
+// Recognize selected PUSH, CALL and HL-setup first opcodes as weak entry evidence.
 fn looks_like_function_entry_placeholder(analysis: &FunctionAnalysis) -> bool {
     analysis
         .instructions
@@ -1048,6 +1088,9 @@ fn looks_like_function_entry_placeholder(analysis: &FunctionAnalysis) -> bool {
         .unwrap_or(false)
 }
 
+// Overlay supplied observations by exact bank and block address range. Replace matched
+// function summaries while appending hints/annotations; unmatched old summaries remain.
+// Input order drives value-transition guesses; no ROM identity or chronological validation occurs here.
 pub fn apply_trace_observations(
     report: &mut DecompileReport,
     observations: &[DecompileTraceObservation],
@@ -1066,6 +1109,7 @@ pub fn apply_trace_observations(
                 continue;
             }
             matched_any = true;
+            // A supplied zero count still contributes one hit; timestamps bound the summary but do not reorder observations.
             let observation_hit_count = observation.hit_count.max(1);
             summary.hit_count = summary.hit_count.saturating_add(observation_hit_count);
             let frame = observation.completed_frames.or(observation.active_frame);
@@ -1140,6 +1184,7 @@ pub fn apply_trace_observations(
                 .iter()
                 .map(|hit| hit.pc)
                 .collect::<BTreeSet<_>>();
+            // This label uses only the six retained hottest PCs, so an observed block outside that preview can appear cold.
             let cold_blocks = function
                 .blocks
                 .iter()
@@ -1172,6 +1217,7 @@ pub fn apply_trace_observations(
     applied
 }
 
+// Match a parsed bank/address exactly, or match current name, canonical name or ID ignoring ASCII case.
 fn function_selector_matches(function: &DecompileFunctionInfo, selector: &str) -> bool {
     if let Some((bank, addr)) = parse_bank_addr_selector(selector) {
         return function.bank == bank && function.start_address == addr;
@@ -1182,6 +1228,7 @@ fn function_selector_matches(function: &DecompileFunctionInfo, selector: &str) -
         || function.id.to_ascii_lowercase() == selector
 }
 
+// Trim selection strings and drop empty values before report filtering.
 fn parse_selected_filters(values: &[String]) -> Vec<String> {
     values
         .iter()
@@ -1190,6 +1237,8 @@ fn parse_selected_filters(values: &[String]) -> Vec<String> {
         .collect()
 }
 
+// Match selected names or bank/address pairs. With no filters, include-all accepts every
+// source kind; its name does not imply a separate named-only restriction in this helper.
 fn match_selected_filter(
     function: &FunctionAnalysis,
     filters: &[String],
@@ -1212,6 +1261,8 @@ fn match_selected_filter(
     })
 }
 
+// Parse addresses as hexadecimal. Banks with a hex prefix or at most two hex digits
+// are hexadecimal; longer unprefixed bank strings use decimal parsing.
 fn parse_bank_addr_selector(text: &str) -> Option<(u16, u16)> {
     let (bank_text, addr_text) = text.split_once(':')?;
     let bank = if bank_text.starts_with("0x") || bank_text.starts_with("0X") {
@@ -1230,6 +1281,8 @@ fn parse_bank_addr_selector(text: &str) -> Option<(u16, u16)> {
     Some((bank, addr))
 }
 
+// Classify the function name and generated names for call destinations, deduplicating
+// canonical intrinsic names. Generated destination names do not incorporate symbol lookup.
 fn classify_intrinsics(function: &FunctionAnalysis) -> Vec<KitaqgbIntrinsicMatch> {
     let mut out = Vec::new();
     if let Some(m) = classify_symbol_name(&function.name) {
@@ -1250,6 +1303,8 @@ fn classify_intrinsics(function: &FunctionAnalysis) -> Vec<KitaqgbIntrinsicMatch
     out
 }
 
+// Collect sorted, unique helper-shape labels from names, text patterns and call hints.
+// These labels suggest code roles; they do not prove compiler provenance or behavior.
 fn infer_kitaqgb_fingerprints(
     function: &FunctionAnalysis,
     call_sites: &[DecompileCallSiteHint],
@@ -1354,6 +1409,8 @@ fn infer_kitaqgb_fingerprints(
     out
 }
 
+// Recognize the thunk prefix ignoring ASCII case, skip decimal bank digits and an optional
+// underscore, then return the nonempty target suffix without validating the bank number.
 fn parse_kitaqgb_bank_thunk_target_name(name: &str) -> Option<String> {
     let prefix = "__kq_thunk_b";
     let lower = name.to_ascii_lowercase();
@@ -1370,6 +1427,8 @@ fn parse_kitaqgb_bank_thunk_target_name(name: &str) -> Option<String> {
     (!target.is_empty()).then(|| target.to_string())
 }
 
+// Turn boundary, slot, call and helper-pattern hints into manual-review suggestions.
+// The suggestions describe candidate interpretations, not verified signatures or recovered types.
 fn build_initial_suggestions(
     function: &FunctionAnalysis,
     stack_slots: &[DecompileStackSlotHint],
@@ -1480,6 +1539,7 @@ fn build_initial_suggestions(
     out
 }
 
+// Generate an automatic function name only for a call/RST with a resolved target bank.
 fn xref_name_guess(xref: &XrefInfo) -> Option<String> {
     if xref.kind.starts_with("call") || xref.kind == "rst" {
         if let Some(bank) = xref.to_bank {
@@ -1489,6 +1549,7 @@ fn xref_name_guess(xref: &XrefInfo) -> Option<String> {
     None
 }
 
+// Index analyzed names by exact bank and function entry address.
 fn build_function_name_lookup(functions: &[FunctionAnalysis]) -> BTreeMap<(u16, u16), String> {
     functions
         .iter()
@@ -1496,6 +1557,7 @@ fn build_function_name_lookup(functions: &[FunctionAnalysis]) -> BTreeMap<(u16, 
         .collect()
 }
 
+// Attach incoming references only when their resolved destination equals a known function entry.
 fn build_xrefs_in_map(
     xrefs: &[XrefInfo],
     functions: &BTreeMap<(u16, u16), String>,
@@ -1513,6 +1575,7 @@ fn build_xrefs_in_map(
     map
 }
 
+// Sort references by source/destination/kind and remove adjacent fully equal entries.
 fn collect_global_xrefs(functions: &[FunctionAnalysis]) -> Vec<XrefInfo> {
     let mut all = functions
         .iter()
@@ -1531,6 +1594,9 @@ fn collect_global_xrefs(functions: &[FunctionAnalysis]) -> Vec<XrefInfo> {
     all
 }
 
+// Walk reachable instruction starts inside one ROM window, stopping at other known roots.
+// Follow in-window jumps and call fallthrough; resolved callees are discovered by the outer pass.
+// The fixed confidence score summarizes available hints and is not a measured probability.
 fn analyze_function(
     rom: &[u8],
     rom_bank_count: u16,
@@ -1607,6 +1673,8 @@ fn analyze_function(
                         queue.push_back(next);
                     }
                 }
+                // The target-bearing non-control case currently adds no next address here;
+                // fallthrough is queued below only when target_addr is absent.
                 _ => {}
             }
         } else if ins.fallthrough && window.contains(next) {
@@ -1642,6 +1710,9 @@ fn analyze_function(
     }
 }
 
+// Split decoded starts at selected branch/call leaders, connect local successors and
+// annotate structural candidates using dominators. This approximate graph is for inspection,
+// not a proof that emitted structured pseudocode preserves every execution path.
 fn build_basic_blocks(
     function: &FunctionAnalysis,
     xrefs: &[XrefInfo],
@@ -1728,6 +1799,7 @@ fn build_basic_blocks(
         let Some(last) = blocks[i].instructions.last().cloned() else {
             continue;
         };
+        // Successors are chosen from sorted block starts rather than exact next instruction addresses.
         let next_block = blocks.get(i + 1).map(|block| block.start_address);
         match last.flow_kind.as_str() {
             "jump" => {
@@ -1822,6 +1894,7 @@ fn build_basic_blocks(
         }
     }
 
+    // The target role below currently tests reference source addresses, not destination addresses.
     let function_targets = xrefs
         .iter()
         .filter(|xref| xref.from_bank == function.bank)
@@ -1836,12 +1909,15 @@ fn build_basic_blocks(
     blocks
 }
 
+// Read the final underscore-delimited block-ID component as a hexadecimal address.
 fn parse_block_id_addr(id: &str) -> Option<u16> {
     id.rsplit('_')
         .next()
         .and_then(|hex| u16::from_str_radix(hex, 16).ok())
 }
 
+// Combine static listings, graph sets and candidate variable/call/helper hints.
+// Trace annotations initially contain static notices; a runtime summary is absent until overlaid.
 fn build_artifact(
     function: &FunctionAnalysis,
     blocks: &[DecompileBasicBlockInfo],
@@ -1905,6 +1981,8 @@ fn build_artifact(
     }
 }
 
+// Render bank/address, available bytes and decoded text, adding target names when the
+// render-time bank assumption resolves them. This is a listing, not round-trip assembly source.
 fn render_disassembly(
     function: &FunctionAnalysis,
     function_lookup: &BTreeMap<(u16, u16), String>,
@@ -1942,6 +2020,8 @@ fn render_disassembly(
     lines.join("\n")
 }
 
+// Render readable instruction summaries and tentative loop/branch structure with labels.
+// This output is explanatory pseudocode: it is not executable C or a semantics-preserving translation.
 fn render_pseudocode(
     function: &FunctionAnalysis,
     blocks: &[DecompileBasicBlockInfo],
@@ -2037,6 +2117,8 @@ fn render_pseudocode(
         }
     }
 
+    // Loop rendering emits headers and recorded latches, not a complete natural-loop region.
+    // Latches are not marked emitted here and may also appear in the outer block listing.
     let mut emitted_loops = BTreeSet::new();
     let mut emitted_blocks = BTreeSet::new();
     let mut i = 0usize;
@@ -2094,6 +2176,8 @@ fn render_pseudocode(
     lines.join("\n")
 }
 
+// Emit a block body followed by return/jump notation and structure hints.
+// Conditional jump notation requires two recorded successors; unresolved targets stay explicit.
 fn emit_block_with_structure(
     lines: &mut Vec<String>,
     block: &DecompileBasicBlockInfo,
@@ -2157,6 +2241,8 @@ fn emit_block_with_structure(
     }
 }
 
+// Start fresh HL alias tracking for each block, emit call summaries separately and
+// leave other control instructions to the outer renderer. Update aliases after each instruction.
 fn emit_block_body(
     lines: &mut Vec<String>,
     block: &DecompileBasicBlockInfo,
@@ -2187,6 +2273,8 @@ fn emit_block_body(
     }
 }
 
+// Translate recognized instruction text into compact statements and retain unhandled
+// instructions as comments. Flag effects, delayed EI and bus timing are not fully represented.
 fn instruction_to_statement(
     ins: &DecodedInstruction,
     context: &PseudocodeContext,
@@ -2282,6 +2370,8 @@ fn instruction_to_statement(
     format!("/* {} */", ins.text)
 }
 
+// Render RST, known names and selected intrinsic aliases; retain ambiguous targets by address.
+// Arguments and conditional-call guards are not reconstructed by this formatter.
 fn call_statement(
     ins: &DecodedInstruction,
     function_lookup: &BTreeMap<(u16, u16), String>,
@@ -2316,6 +2406,7 @@ fn call_statement(
     "call_unknown()".to_string()
 }
 
+// Derive a flag expression only from the last instruction of a block.
 fn branch_condition_from_block(block: &DecompileBasicBlockInfo) -> Option<&str> {
     block
         .instructions
@@ -2323,6 +2414,7 @@ fn branch_condition_from_block(block: &DecompileBasicBlockInfo) -> Option<&str> 
         .and_then(branch_condition_for_instruction)
 }
 
+// Translate the four recognized Z/C conditions on JR, JP, CALL and RET into flag expressions.
 fn branch_condition_for_instruction(ins: &DecodedInstruction) -> Option<&str> {
     let upper = ins.text.to_ascii_uppercase();
     if upper.starts_with("JR NZ,")
@@ -2354,6 +2446,7 @@ fn branch_condition_for_instruction(ins: &DecodedInstruction) -> Option<&str> {
     }
 }
 
+// Identify branch/call/return families handled outside ordinary statement rendering; HALT/STOP remain statements.
 fn is_control_instruction(ins: &DecodedInstruction) -> bool {
     matches!(
         ins.flow_kind.as_str(),
@@ -2369,6 +2462,8 @@ fn is_control_instruction(ins: &DecodedInstruction) -> bool {
     )
 }
 
+// Intersect predecessor sets to a fixed point with block zero as entry.
+// Non-entry blocks without known predecessors retain the initial universe set.
 fn compute_dominators(blocks: &[DecompileBasicBlockInfo]) -> Vec<BTreeSet<usize>> {
     let all = (0..blocks.len()).collect::<BTreeSet<_>>();
     let mut dom = vec![all.clone(); blocks.len()];
@@ -2406,6 +2501,8 @@ fn compute_dominators(blocks: &[DecompileBasicBlockInfo]) -> Vec<BTreeSet<usize>
     dom
 }
 
+// Intersect successor sets backward from known exits. There is no synthetic common exit;
+// closed cycles or missing successors can retain the initial universe set.
 fn compute_post_dominators(blocks: &[DecompileBasicBlockInfo]) -> Vec<BTreeSet<usize>> {
     if blocks.is_empty() {
         return Vec::new();
@@ -2454,6 +2551,8 @@ fn compute_post_dominators(blocks: &[DecompileBasicBlockInfo]) -> Vec<BTreeSet<u
     post_dominators
 }
 
+// Infer loop/if/break/continue labels from graph sets in block order.
+// These are presentation hints, and loop headers are accumulated during this same pass.
 fn analyze_control_flow_hints(
     blocks: &[DecompileBasicBlockInfo],
     dominators: &[BTreeSet<usize>],
@@ -2501,6 +2600,8 @@ fn analyze_control_flow_hints(
     hints
 }
 
+// Look backward at most five instructions before JP HL for a table base and indexing
+// shape, then read at most sixteen little-endian targets. Candidate cases are not executed.
 fn detect_switch_candidates(
     rom: &[u8],
     rom_bank_count: u16,
@@ -2552,6 +2653,7 @@ fn detect_switch_candidates(
                 break;
             }
             let target_addr = u16::from(rom[ptr_linear]) | (u16::from(rom[ptr_linear + 1]) << 8);
+            // These table entries use fixed/current-bank assumptions and do not infer mapper changes.
             let target_bank =
                 resolve_static_pointer_bank(function.bank, target_addr, rom_bank_count);
             if target_bank.is_none() && target_addr > 0x0100 {
@@ -2576,6 +2678,8 @@ fn detect_switch_candidates(
     out
 }
 
+// Mark decoded instruction bytes as code and classify remaining bank-window runs of
+// at least four bytes. Unreached executable bytes may therefore be classified as data.
 fn classify_data_ranges(
     rom: &[u8],
     rom_bank_count: u16,
@@ -2624,6 +2728,8 @@ fn classify_data_ranges(
     ranges
 }
 
+// Prefer an even ROM-address-like word array, then a sixteen-byte-aligned varied-byte
+// tile shape, otherwise readonly data. Mapping uses bank count; callers must provide backed ranges.
 fn classify_data_range_bytes(
     rom: &[u8],
     bank: u16,
@@ -2656,6 +2762,8 @@ fn classify_data_range_bytes(
     "readonly_data".to_string()
 }
 
+// Prefer fixed/same-switchable-bank mapping; from bank zero, use a unique metadata
+// entry bank when available. Dynamic mapper state is not tracked and ambiguous targets remain absent.
 fn resolve_target_bank(
     current_bank: u16,
     target_addr: u16,
@@ -2693,6 +2801,8 @@ fn resolve_target_bank(
     None
 }
 
+// Map the fixed window to bank zero and the switchable window to a valid current
+// nonzero bank. A bank-zero call into the switchable window cannot be resolved statically here.
 fn resolve_static_pointer_bank(
     current_bank: u16,
     target_addr: u16,
@@ -2711,6 +2821,7 @@ fn resolve_static_pointer_bank(
     }
 }
 
+// Use fixed/same-bank rendering assumptions without ROM-size or metadata validation.
 fn resolve_render_bank(current_bank: u16, target_addr: u16) -> Option<u16> {
     if target_addr <= FIXED_BANK_END {
         Some(0)
@@ -2721,6 +2832,8 @@ fn resolve_render_bank(current_bank: u16, target_addr: u16) -> Option<u16> {
     }
 }
 
+// Move decoded fields into the report representation and derive target bank from the
+// rendering rule; this does not carry forward metadata-resolved xref bank information.
 fn to_decoded_instruction(bank: u16, ins: RawInstruction) -> DecodedInstruction {
     let target_bank = ins
         .target_addr
@@ -2742,6 +2855,7 @@ fn to_decoded_instruction(bank: u16, ins: RawInstruction) -> DecodedInstruction 
     }
 }
 
+// Join mnemonic and operands with one space, omitting that space when operands are empty.
 fn ins_display_text_raw(ins: &RawInstruction) -> String {
     if ins.operand_text.is_empty() {
         ins.mnemonic.clone()
@@ -2750,6 +2864,7 @@ fn ins_display_text_raw(ins: &RawInstruction) -> String {
     }
 }
 
+// Expose stable lowercase flow-category names used in serialized blocks and render dispatch.
 fn flow_kind_name(kind: FlowKind) -> &'static str {
     match kind {
         FlowKind::None => "none",
@@ -2768,10 +2883,12 @@ fn flow_kind_name(kind: FlowKind) -> &'static str {
     }
 }
 
+// Generate a deterministic function name containing its bank and entry address.
 fn auto_function_name(bank: u16, addr: u16) -> String {
     format!("sub_bank{:02X}_{:04X}", bank, addr)
 }
 
+// Use function-style names for call/RST targets and local-label names for other references.
 fn auto_label_name(bank: u16, addr: u16, kind: &str) -> String {
     if kind.contains("call") || kind == "rst" {
         auto_function_name(bank, addr)
@@ -2780,6 +2897,8 @@ fn auto_label_name(bank: u16, addr: u16, kind: &str) -> String {
     }
 }
 
+// Replace recognized HL references with aliases or dereferences, then apply literal
+// case-sensitive replacements for other memory tokens. This does not parse general expressions.
 fn normalize_operand(text: &str, context: &PseudocodeContext, state: &BlockRenderState) -> String {
     let token = text.trim();
     if token.eq_ignore_ascii_case("[HL+]") {
@@ -2807,6 +2926,8 @@ fn normalize_operand(text: &str, context: &PseudocodeContext, state: &BlockRende
         .replace("[$", "mem[$")
 }
 
+// Track explicit SP-relative HL setup and INC/DEC HL, clearing on selected HL clobbers.
+// This local heuristic does not model every H/L write, call clobber or implicit HL increment.
 fn update_render_state(state: &mut BlockRenderState, ins: &DecodedInstruction) {
     let upper = ins.text.to_ascii_uppercase();
     if let Some(offset) = parse_sp_relative_offset(&upper) {
@@ -2841,6 +2962,8 @@ fn update_render_state(state: &mut BlockRenderState, ins: &DecodedInstruction) {
     }
 }
 
+// Name explicit SP-relative references and PUSH/POP register spill candidates using
+// static access/lifetime profiles. Keep a bounded evidence preview and a rendering name map.
 fn infer_stack_and_temp_hints(
     function: &FunctionAnalysis,
 ) -> (
@@ -2936,6 +3059,8 @@ fn infer_stack_and_temp_hints(
     (stack_slots, temp_slots, context)
 }
 
+// Rank pointer, enum, flag, counter and byte/word candidates from access patterns.
+// Some byte/word signals are function-wide, so a classification is not proof about one slot.
 fn infer_stack_slot_type(
     function: &FunctionAnalysis,
     offset: i16,
@@ -2991,6 +3116,7 @@ fn infer_stack_slot_type(
     }
 }
 
+// Assign qualitative confidence from distinct pattern counts and static access totals.
 fn infer_stack_slot_confidence(profile: &StackAccessProfile) -> String {
     let signal_count = profile.patterns.len() as u32 + profile.bit_indices.len() as u32;
     let access_weight = profile.read_count.saturating_add(profile.write_count);
@@ -3003,6 +3129,8 @@ fn infer_stack_slot_confidence(profile: &StackAccessProfile) -> String {
     }
 }
 
+// Scan instructions in address order, attributing recognized HL accesses to the
+// current SP alias. This is not control-flow-sensitive alias or liveness analysis.
 fn analyze_stack_slot_access_patterns(
     function: &FunctionAnalysis,
 ) -> BTreeMap<i16, StackAccessProfile> {
@@ -3092,6 +3220,8 @@ fn analyze_stack_slot_access_patterns(
     profiles
 }
 
+// Compare first/last alias-access indices with call indices in address order,
+// producing candidate phase labels rather than path-sensitive live ranges.
 fn analyze_stack_slot_lifetimes(function: &FunctionAnalysis) -> BTreeMap<i16, String> {
     let mut access_indices = BTreeMap::<i16, Vec<usize>>::new();
     let mut call_indices = Vec::<usize>::new();
@@ -3176,6 +3306,8 @@ fn analyze_stack_slot_lifetimes(function: &FunctionAnalysis) -> BTreeMap<i16, St
     lifetimes
 }
 
+// Collect register/stack setup from the preceding four decoded instructions by address.
+// No def-use or intervening-control-flow proof establishes that these values are arguments.
 fn infer_call_site_hints(
     function: &FunctionAnalysis,
     function_lookup: &BTreeMap<(u16, u16), String>,
@@ -3228,10 +3360,13 @@ fn infer_call_site_hints(
     hints
 }
 
+// Guess register, stack or mixed setup from text hints. LD HL,SP can contribute
+// to both categories, so this label alone does not establish the calling convention.
 fn infer_static_calling_convention_hint(static_argument_hints: &[String]) -> Option<String> {
     let uses_stack = static_argument_hints
         .iter()
         .any(|hint| hint.contains("PUSH ") || hint.contains("LD HL,SP"));
+    // A textual LD HL,SP setup matches this register check as well as the stack check above.
     let uses_registers = static_argument_hints.iter().any(|hint| {
         hint.contains(" LD A,")
             || hint.contains(" LD BC,")
@@ -3246,12 +3381,14 @@ fn infer_static_calling_convention_hint(static_argument_hints: &[String]) -> Opt
     }
 }
 
+// Parse the decimal byte before the operand comma; opcode/range validation belongs to callers.
 fn parse_hl_bit_index(text: &str) -> Option<u8> {
     let (_, tail) = text.split_once(' ')?;
     let (bit_text, _) = tail.split_once(',')?;
     bit_text.trim().parse::<u8>().ok()
 }
 
+// Extract a literal-looking HL store token; dollar-prefixed text is retained without numeric validation.
 fn parse_hl_write_literal(text: &str) -> Option<String> {
     let literal = text.strip_prefix("LD [HL],")?.trim();
     if literal.starts_with('$') || literal.chars().all(|c| c.is_ascii_digit() || c == '-') {
@@ -3261,6 +3398,7 @@ fn parse_hl_write_literal(text: &str) -> Option<String> {
     }
 }
 
+// Keep parseable SP-relative keys and narrow supplied values to sixteen bits.
 fn normalized_trace_stack_slot_values(observation: &DecompileTraceObservation) -> Vec<(i16, u16)> {
     observation
         .stack_slot_values
@@ -3271,6 +3409,7 @@ fn normalized_trace_stack_slot_values(observation: &DecompileTraceObservation) -
         .collect()
 }
 
+// Accept a signed decimal offset or an sp/SP-prefixed signed suffix after trimming.
 fn parse_trace_stack_slot_key(key: &str) -> Option<i16> {
     let trimmed = key.trim();
     if let Ok(value) = trimmed.parse::<i16>() {
@@ -3285,10 +3424,13 @@ fn parse_trace_stack_slot_key(key: &str) -> Option<i16> {
     None
 }
 
+// Treat values in 0100-DFFF as pointer-like candidates without checking mapped memory or dereferencing.
 fn looks_like_pointer_value(value: u16) -> bool {
     matches!(value, 0x8000..=0xDFFF) || matches!(value, 0x0100..=0x7FFF)
 }
 
+// Append a bounded value preview and rank flag, pointer, counter then enum role guesses.
+// Promote selected static types/confidence while retaining stronger preexisting type labels.
 fn apply_trace_value_profile_to_slot(
     slot: &mut DecompileStackSlotHint,
     profile: &TraceValueProfile,
@@ -3357,11 +3499,14 @@ fn apply_trace_value_profile_to_slot(
     }
 }
 
+// Match observations at exact call bank/PC and summarize selected registers and supplied
+// stack values. These observed values suggest arguments but are not callee-use evidence.
 fn refine_call_sites_from_trace(
     function: &mut DecompileFunctionInfo,
     observations: &[DecompileTraceObservation],
 ) {
     for call_site in &mut function.artifact.call_sites {
+        // Repeated overlays replace the hit count; when no new values exist, old argument strings remain.
         let mut runtime_argument_hints = BTreeSet::new();
         let mut hit_count = 0u64;
         for observation in observations {
@@ -3405,6 +3550,8 @@ fn refine_call_sites_from_trace(
     }
 }
 
+// Use function hit thresholds plus optional per-slot value patterns to refine role labels
+// and suggestions. Function activity alone does not demonstrate access to every listed slot.
 fn refine_variable_hints_from_trace(
     function: &mut DecompileFunctionInfo,
     summary: &DecompileTraceSummary,
@@ -3476,12 +3623,15 @@ fn refine_variable_hints_from_trace(
     function.artifact.suggestions.dedup();
 }
 
+// Recognize LD HL,SP text ignoring case and parse its signed decimal displacement.
 fn parse_sp_relative_offset(text: &str) -> Option<i16> {
     let upper = text.trim().to_ascii_uppercase();
     let suffix = upper.strip_prefix("LD HL,SP")?;
     parse_signed_suffix(suffix.trim())
 }
 
+// Accept an empty suffix as zero or a signed decimal magnitude, optionally preceded by $.
+// The dollar marker is stripped here; it does not select hexadecimal parsing.
 fn parse_signed_suffix(text: &str) -> Option<i16> {
     if text.is_empty() {
         return Some(0);
@@ -3497,6 +3647,7 @@ fn parse_signed_suffix(text: &str) -> Option<i16> {
     Some(sign.saturating_mul(magnitude))
 }
 
+// Require a three-byte readable slice and recognize selected entry-like first opcodes.
 fn looks_like_function_entry(rom: &[u8], rom_bank_count: u16, bank: u16, addr: u16) -> bool {
     let linear = match rom_linear_index(bank, addr, rom_bank_count) {
         Some(value) => value as usize,
@@ -3509,6 +3660,8 @@ fn looks_like_function_entry(rom: &[u8], rom_bank_count: u16, bank: u16, addr: u
     ) || bytes.first().copied() == Some(0x21)
 }
 
+// Name negative offsets as locals and offsets from two onward as word-sized argument
+// candidates. Adjacent bytes can share a name; this assumes a layout rather than proving one.
 fn classify_stack_slot(offset: i16) -> (String, String) {
     if offset < 0 {
         (
@@ -3525,6 +3678,7 @@ fn classify_stack_slot(offset: i16) -> (String, String) {
     }
 }
 
+// Prefer the inferred context name, otherwise derive the conventional offset-based fallback.
 fn stack_slot_name(offset: i16, context: &PseudocodeContext) -> String {
     context
         .stack_slot_names
@@ -3533,6 +3687,7 @@ fn stack_slot_name(offset: i16, context: &PseudocodeContext) -> String {
         .unwrap_or_else(|| classify_stack_slot(offset).0)
 }
 
+// Test half-open block address intervals; a PC need not equal a decoded instruction start.
 fn function_contains_pc(function: &DecompileFunctionInfo, pc: u16) -> bool {
     function
         .blocks
@@ -3540,6 +3695,7 @@ fn function_contains_pc(function: &DecompileFunctionInfo, pc: u16) -> bool {
         .any(|block| pc >= block.start_address && pc < block.end_address)
 }
 
+// Keep the smaller available value while treating absence as no candidate.
 fn min_optional(current: Option<u64>, candidate: Option<u64>) -> Option<u64> {
     match (current, candidate) {
         (Some(a), Some(b)) => Some(a.min(b)),
@@ -3549,6 +3705,7 @@ fn min_optional(current: Option<u64>, candidate: Option<u64>) -> Option<u64> {
     }
 }
 
+// Keep the larger available value while treating absence as no candidate.
 fn max_optional(current: Option<u64>, candidate: Option<u64>) -> Option<u64> {
     match (current, candidate) {
         (Some(a), Some(b)) => Some(a.max(b)),
@@ -3558,6 +3715,7 @@ fn max_optional(current: Option<u64>, candidate: Option<u64>) -> Option<u64> {
     }
 }
 
+// Append a present, unseen string only while below the supplied capacity; preserve encounter order.
 fn push_unique_limited(target: &mut Vec<String>, value: Option<String>, limit: usize) {
     let Some(value) = value else { return };
     if target.iter().any(|existing| existing == &value) {
@@ -3568,6 +3726,7 @@ fn push_unique_limited(target: &mut Vec<String>, value: Option<String>, limit: u
     }
 }
 
+// Append hit, frame-span and hottest-PC summaries without clearing earlier annotations.
 fn push_trace_summary_annotations(target: &mut Vec<String>, summary: &DecompileTraceSummary) {
     target.push(format!(
         "trace annotation: {} runtime hit(s)",
@@ -3587,6 +3746,7 @@ fn push_trace_summary_annotations(target: &mut Vec<String>, summary: &DecompileT
     }
 }
 
+// Validate the bank number and its fixed/switchable address window, not backing byte availability.
 fn is_code_addr(bank: u16, addr: u16, rom_bank_count: u16) -> bool {
     if bank >= rom_bank_count {
         return false;
@@ -3598,6 +3758,8 @@ fn is_code_addr(bank: u16, addr: u16, rom_bank_count: u16) -> bool {
     }
 }
 
+// Translate a valid bank/window pair to a linear file offset; the final partial bank
+// can still map beyond the supplied ROM bytes.
 fn rom_linear_index(bank: u16, addr: u16, rom_bank_count: u16) -> Option<usize> {
     if bank >= rom_bank_count {
         return None;
@@ -3611,11 +3773,15 @@ fn rom_linear_index(bank: u16, addr: u16, rom_bank_count: u16) -> Option<usize> 
     }
 }
 
+// Decode static opcode text, length, targets and flow categories without emulation.
+// Missing operand bytes default to zero; the stored byte slice retains only available bytes.
+// Callers must ensure the starting file offset exists even within a partially filled bank.
 fn decode_instruction(rom: &[u8], rom_bank_count: u16, bank: u16, addr: u16) -> RawInstruction {
     let linear_address = rom_linear_index(bank, addr, rom_bank_count).unwrap_or(0) as u32;
     let Some(index) = rom_linear_index(bank, addr, rom_bank_count) else {
         return invalid_instruction(bank, addr, linear_address, vec![]);
     };
+    // Decode from the physical file slice; operand lookahead is not clipped at a 16 KiB bank boundary.
     let op = *rom.get(index).unwrap_or(&0x00);
     let b1 = *rom.get(index + 1).unwrap_or(&0x00);
     let b2 = *rom.get(index + 2).unwrap_or(&0x00);
@@ -3961,6 +4127,7 @@ fn decode_instruction(rom: &[u8], rom_bank_count: u16, bank: u16, addr: u16) -> 
             )
         }
         0xCB => decode_cb_instruction(bank, addr, linear_address, op, b1, rom, index),
+        // The static decoder marks F4 invalid even though the current execution core accepts an F4 call variant.
         0xD3 | 0xDB | 0xDD | 0xE3 | 0xE4 | 0xEB | 0xEC | 0xED | 0xF4 | 0xFC | 0xFD => {
             invalid_instruction(bank, addr, linear_address, vec![op])
         }
@@ -4051,6 +4218,8 @@ fn decode_instruction(rom: &[u8], rom_bank_count: u16, bank: u16, addr: u16) -> 
     }
 }
 
+// Split the CB byte into rotation/bit group and register operand, retaining a two-byte
+// logical length even if the available file slice is shorter.
 fn decode_cb_instruction(
     bank: u16,
     addr: u16,
@@ -4088,6 +4257,7 @@ fn decode_cb_instruction(
     }
 }
 
+// Represent an undecodable byte/address as a one-byte non-fallthrough DB placeholder.
 fn invalid_instruction(
     bank: u16,
     addr: u16,
@@ -4117,6 +4287,7 @@ mod tests {
     use std::{fs, path::Path};
 
     #[test]
+    // Decode synthetic CALL/RET bytes and check mnemonic and immediate call target.
     fn decodes_basic_call_and_ret() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0xCD;
@@ -4131,6 +4302,7 @@ mod tests {
     }
 
     #[test]
+    // Supply a one-byte named function and check metadata naming in the generated report.
     fn analyzes_named_function_from_metadata() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0xC9;
@@ -4156,6 +4328,8 @@ mod tests {
     }
 
     #[test]
+    // Check the entry appears with include-all and an empty selector list; despite the name,
+    // this fixture does not pass an explicit bank/address selector.
     fn selected_function_filter_accepts_bank_addr() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0xC9;
@@ -4171,6 +4345,7 @@ mod tests {
     }
 
     #[test]
+    // Apply function/label/report overrides and check the new display name with the canonical name retained.
     fn annotation_overlay_can_rename_and_note_function() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0xC9;
@@ -4220,6 +4395,7 @@ mod tests {
     }
 
     #[test]
+    // Supply two synthetic observations and check one matched function, hit/frame summary and annotation.
     fn trace_overlay_records_runtime_hits() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0x00;
@@ -4286,6 +4462,7 @@ mod tests {
     }
 
     #[test]
+    // Decode an SP-relative read and PUSH/POP pair, checking candidate names/accesses and pseudocode mentions.
     fn pseudocode_infers_stack_and_temp_slots() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0xF8; // ld hl,sp+2
@@ -4314,6 +4491,7 @@ mod tests {
     }
 
     #[test]
+    // Use INC, BIT and auto-increment loads through separate SP aliases to exercise three candidate type labels.
     fn stack_slot_type_inference_can_mark_bool_counter_and_pointer_patterns() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0xF8; // ld hl,sp+2
@@ -4348,6 +4526,7 @@ mod tests {
     }
 
     #[test]
+    // Overlay three authored value snapshots and check counter, flag, pointer and enum candidate refinements.
     fn trace_values_can_refine_runtime_roles_and_types() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0xF8; // ld hl,sp+2
@@ -4459,6 +4638,7 @@ mod tests {
     }
 
     #[test]
+    // Place accesses to one SP offset before and after a call and check the address-order lifetime hint.
     fn stack_slot_lifetime_can_detect_across_call_boundary() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0xF8; // ld hl,sp+2
@@ -4487,6 +4667,7 @@ mod tests {
     }
 
     #[test]
+    // Supply register and stack values at a synthetic call PC and check value strings plus a mixed-call guess.
     fn trace_values_can_refine_call_site_argument_hints() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0x3E; // ld a,$05
@@ -4545,6 +4726,7 @@ mod tests {
     }
 
     #[test]
+    // Select a caller and verify its plausible callee is also emitted by the later recovery pass.
     fn recovered_function_heuristics_can_promote_call_target() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0xCD; // call 0110
@@ -4586,6 +4768,7 @@ mod tests {
     }
 
     #[test]
+    // Select a caller whose target starts with invalid opcodes and check that recovery rejects that target.
     fn recovered_function_heuristics_reject_invalid_heavy_target() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0xCD; // call 0110
@@ -4610,6 +4793,7 @@ mod tests {
     }
 
     #[test]
+    // Select only a callee and check incoming-reference evidence remains from the unselected caller.
     fn selected_function_reports_incoming_xrefs_from_unselected_callers() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0xCD; // call 0110
@@ -4634,6 +4818,8 @@ mod tests {
     }
 
     #[test]
+    // Optionally load local ROM/metadata fixtures and check a named thunk hint. Missing files
+    // return immediately, so a successful test process does not establish that this fixture ran.
     fn sample_rom_bank_thunk_gets_precision_hints() {
         let rom_path = Path::new("C:\\kitaqgb_project\\sample_roms\\sample_game.gb");
         let dbg2_path = Path::new("C:\\kitaqgb_project\\sample_roms\\sample_game.dbg2.json");
@@ -4669,6 +4855,7 @@ mod tests {
     }
 
     #[test]
+    // Construct SP-setup and store-loop instruction shapes and assert the two heuristic fingerprint labels.
     fn fingerprint_dictionary_can_detect_stack_frame_and_memset_shapes() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0xF8; // ld hl,sp+2
@@ -4700,6 +4887,8 @@ mod tests {
     }
 
     #[test]
+    // Construct a loader-like sequence and pointer bytes before JP HL, then check candidate presence.
+    // This test does not execute the dispatch or validate the inferred table length.
     fn switch_candidate_detection_can_use_loader_pattern() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0x21; // ld hl,$0120

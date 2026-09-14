@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Named bank/address span with an exclusive u32 end, allowing 10000
+// to represent the boundary beyond the largest CPU address.
 pub struct SymbolInfo {
     pub bank: u16,
     pub start: u16,
@@ -15,6 +17,8 @@ pub struct SymbolInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Source position attached to a bank/address, with optional column,
+// symbol and section metadata supplied by sidecar files.
 pub struct SourceLocationInfo {
     pub bank: u16,
     pub addr: u16,
@@ -29,6 +33,8 @@ pub struct SourceLocationInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Compiler-supplied function range and calling-convention metadata;
+// byte sizes describe the declared interface rather than an executed call.
 pub struct FunctionInfo {
     pub name: String,
     pub bank: u16,
@@ -52,6 +58,7 @@ pub struct FunctionInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Named storage location with size, region and optional bank context.
 pub struct VariableInfo {
     pub name: String,
     pub address: u16,
@@ -62,6 +69,8 @@ pub struct VariableInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Static function/call counts and interface metadata from build output,
+// kept separate from measured execution statistics.
 pub struct StaticEstimateInfo {
     pub name: String,
     pub bank: u16,
@@ -85,6 +94,8 @@ pub struct StaticEstimateInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Caller/callee relationship and provenance fields carried by sidecars.
+// Signed bank fields are retained as supplied; merging does not add counts.
 pub struct CallEdgeInfo {
     pub caller: String,
     pub callee: String,
@@ -102,6 +113,8 @@ pub struct CallEdgeInfo {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+// Combined symbol, source, function, variable, estimate and call-edge
+// collections. Missing optional collections deserialize as empty.
 pub struct SymbolTable {
     pub symbols: Vec<SymbolInfo>,
     #[serde(default)]
@@ -117,6 +130,7 @@ pub struct SymbolTable {
 }
 
 impl SymbolTable {
+    // Report empty only when all six metadata collections contain no records.
     pub fn is_empty(&self) -> bool {
         self.symbols.is_empty()
             && self.source_locations.is_empty()
@@ -126,6 +140,9 @@ impl SymbolTable {
             && self.call_edges.is_empty()
     }
 
+    // Append and sort locations, then remove adjacent records equal in every
+    // source field. The sort key omits symbol/section, so this is not a global
+    // set-based deduplication of all identical records.
     pub fn merge_sources(&mut self, mut other: Vec<SourceLocationInfo>) {
         self.source_locations.append(&mut other);
         self.source_locations.sort_by_key(|s| {
@@ -148,6 +165,9 @@ impl SymbolTable {
         });
     }
 
+    // Append and sort each metadata collection, removing adjacent records
+    // using collection-specific equality keys. This retains representative
+    // records; call counts and static estimates are not summed or recomputed.
     pub fn merge_from(&mut self, mut other: SymbolTable) {
         self.symbols.append(&mut other.symbols);
         self.symbols
@@ -185,6 +205,8 @@ impl SymbolTable {
         self.functions.append(&mut other.functions);
         self.functions
             .sort_by_key(|f| (f.bank, f.start, f.name.clone()));
+        // Function equality here ignores size and calling-convention metadata
+        // when name, bank and range already agree.
         self.functions.dedup_by(|a, b| {
             a.bank == b.bank && a.start == b.start && a.end == b.end && a.name == b.name
         });
@@ -192,6 +214,7 @@ impl SymbolTable {
         self.variables.append(&mut other.variables);
         self.variables
             .sort_by_key(|v| (v.address, v.name.clone(), v.bank.unwrap_or(0)));
+        // Variable equality uses address, size, name and bank, but not region.
         self.variables.dedup_by(|a, b| {
             a.address == b.address && a.size == b.size && a.name == b.name && a.bank == b.bank
         });
@@ -211,6 +234,8 @@ impl SymbolTable {
                 c.callee_bank,
             )
         });
+        // Keep different counts/kinds as separate records; last_source is not
+        // part of the adjacent-duplicate comparison.
         self.call_edges.dedup_by(|a, b| {
             a.caller == b.caller
                 && a.callee == b.callee
@@ -223,6 +248,8 @@ impl SymbolTable {
         });
     }
 
+    // Return the first symbol in this bank whose half-open range contains
+    // the address; overlapping ranges use collection order.
     pub fn lookup(&self, bank: u16, addr: u16) -> Option<&SymbolInfo> {
         let addr = u32::from(addr);
         self.symbols
@@ -230,6 +257,8 @@ impl SymbolTable {
             .find(|s| s.bank == bank && addr >= u32::from(s.start) && addr < s.end)
     }
 
+    // Find the greatest symbol start at or below the address in this bank,
+    // without requiring the address to remain inside that symbol range.
     pub fn lookup_nearest_before(&self, bank: u16, addr: u16) -> Option<&SymbolInfo> {
         self.symbols
             .iter()
@@ -237,6 +266,7 @@ impl SymbolTable {
             .max_by_key(|s| s.start)
     }
 
+    // Find the smallest symbol start strictly above the address in this bank.
     pub fn lookup_next_after(&self, bank: u16, addr: u16) -> Option<&SymbolInfo> {
         self.symbols
             .iter()
@@ -244,6 +274,8 @@ impl SymbolTable {
             .min_by_key(|s| s.start)
     }
 
+    // Prefer an exact bank/address source position, falling back to the
+    // nearest preceding position without a maximum distance limit.
     pub fn lookup_source(&self, bank: u16, addr: u16) -> Option<&SourceLocationInfo> {
         self.source_locations
             .iter()
@@ -251,6 +283,8 @@ impl SymbolTable {
             .or_else(|| self.lookup_source_nearest_before(bank, addr))
     }
 
+    // Find the greatest source address at or below the requested address
+    // within the same bank, irrespective of function boundaries.
     pub fn lookup_source_nearest_before(
         &self,
         bank: u16,
@@ -262,6 +296,7 @@ impl SymbolTable {
             .max_by_key(|s| s.addr)
     }
 
+    // Find the next strictly greater source address in the same bank.
     pub fn lookup_source_next_after(&self, bank: u16, addr: u16) -> Option<&SourceLocationInfo> {
         self.source_locations
             .iter()
@@ -269,6 +304,7 @@ impl SymbolTable {
             .min_by_key(|s| s.addr)
     }
 
+    // Return the first function whose bank and half-open address range match.
     pub fn lookup_function(&self, bank: u16, addr: u16) -> Option<&FunctionInfo> {
         let addr = u32::from(addr);
         self.functions
@@ -276,6 +312,8 @@ impl SymbolTable {
             .find(|f| f.bank == bank && addr >= u32::from(f.start) && addr < f.end)
     }
 
+    // Resolve a containing function, then match its bank and name to the
+    // first static estimate; no runtime measurements are inferred here.
     pub fn lookup_static_estimate(&self, bank: u16, addr: u16) -> Option<&StaticEstimateInfo> {
         let function = self.lookup_function(bank, addr)?;
         self.static_estimates
@@ -283,6 +321,8 @@ impl SymbolTable {
             .find(|estimate| estimate.bank == function.bank && estimate.name == function.name)
     }
 
+    // Return the first exact name match without disambiguating variable bank
+    // or address when multiple entries share that name.
     pub fn lookup_variable_by_name(&self, name: &str) -> Option<&VariableInfo> {
         self.variables.iter().find(|variable| variable.name == name)
     }

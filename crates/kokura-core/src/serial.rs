@@ -5,12 +5,15 @@ use crate::types::SerialTraceEvent;
 const SERIAL_INTERNAL_BIT_CYCLES: u16 = 512;
 
 #[derive(Debug, Clone, Default)]
+// Return an internal-clock completion request and optional trace records.
 pub struct SerialTickResult {
     pub interrupt_requested: bool,
     pub trace: Vec<SerialTraceEvent>,
 }
 
 #[derive(Debug, Clone, Default)]
+// Report whole-byte peer exchange completion and each endpoint
+// interrupt/trace result separately.
 pub struct SerialLinkExchangeResult {
     pub completed: bool,
     pub self_interrupt_requested: bool,
@@ -20,6 +23,8 @@ pub struct SerialLinkExchangeResult {
 }
 
 #[derive(Debug, Clone, Default)]
+// Report a completed external byte and its outgoing SB value.
+// When completed is false, the default outgoing byte is not a transfer result.
 pub struct SerialExternalClockResult {
     pub completed: bool,
     pub outgoing: u8,
@@ -37,14 +42,20 @@ pub struct Serial {
 }
 
 impl Serial {
+    // Expose the stored control byte with bits 1-6 forced high. Although
+    // write_sc stores bit one, this accessor does not reveal its stored value.
     pub fn read_sc(&self) -> u8 {
         self.sc | 0x7E
     }
 
+    // Replace the serial data/shift register, including during an active transfer.
     pub fn write_sb(&mut self, value: u8) {
         self.sb = value;
     }
 
+    // Keep control bits 7, 1 and 0. A set start bit restarts an eight-bit
+    // transfer and emits its start record; a clear start bit cancels transfer
+    // progress. Clock rate in tick remains fixed regardless of bit one.
     pub fn write_sc(&mut self, value: u8) -> Vec<SerialTraceEvent> {
         self.sc = value & 0x83;
         let mut trace = Vec::new();
@@ -65,6 +76,9 @@ impl Serial {
         trace
     }
 
+    // Advance an armed internal-clock transfer at 512 cycles per bit,
+    // shifting in ones for the disconnected input and requesting IRQ after
+    // eight bits. The supplied cycle count is narrowed to u16 before accumulation.
     pub fn tick(&mut self, cycles: u32) -> SerialTickResult {
         let mut out = SerialTickResult::default();
         if !self.transfer_active || !self.internal_clock() {
@@ -89,6 +103,9 @@ impl Serial {
         out
     }
 
+    // Apply the same fixed-rate disconnected shift without trace allocation,
+    // returning whether the byte completed. Cycle input is narrowed to u16
+    // and the accumulated remainder saturates rather than wrapping.
     pub fn tick_fast(&mut self, cycles: u32) -> bool {
         if !self.transfer_active || !self.internal_clock() {
             return false;
@@ -107,10 +124,12 @@ impl Serial {
         false
     }
 
+    // Return the internal transfer-active latch.
     pub fn transfer_active(&self) -> bool {
         self.transfer_active
     }
 
+    // Report whether SC bit zero selects the internal clock source.
     pub fn internal_clock(&self) -> bool {
         self.sc & 0x01 != 0
     }
@@ -120,6 +139,9 @@ impl Serial {
     /// The transfer only completes when the Game Boy has armed an external-clock
     /// transfer (`SC.7 = 1`, `SC.0 = 0`). The returned `outgoing` byte is the value
     /// that was present in SB before the external device supplied `incoming`.
+    // Complete an armed external-clock transfer as a whole-byte operation:
+    // return the previous SB value, install incoming data, clear progress and
+    // report completion/IRQ without modeling individual external clock edges.
     pub fn clock_external_byte(&mut self, incoming: u8) -> SerialExternalClockResult {
         let mut out = SerialExternalClockResult::default();
         if !self.transfer_active || self.internal_clock() {
@@ -143,6 +165,9 @@ impl Serial {
         out
     }
 
+    // When both endpoints are armed with opposite clock sources, swap their
+    // current SB bytes immediately and complete both transfers with IRQ/events.
+    // This helper does not wait for eight timed link-clock edges.
     pub fn exchange_with_peer(&mut self, peer: &mut Serial) -> SerialLinkExchangeResult {
         let mut out = SerialLinkExchangeResult::default();
         if !self.transfer_active || !peer.transfer_active {
@@ -185,6 +210,7 @@ impl Serial {
 }
 
 impl Default for Serial {
+    // Initialize zero data/control and no active transfer or accumulated cycles.
     fn default() -> Self {
         Self {
             sb: 0,

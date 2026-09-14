@@ -56,38 +56,48 @@ class RegisterSnapshot:
     is_double_speed: bool
 
     @property
+    # Return the high byte of the copied AF register pair.
     def a(self) -> int:
         return (self.af >> 8) & 0xFF
 
     @property
+    # Return the low byte of the copied AF register pair.
     def f(self) -> int:
         return self.af & 0xFF
 
     @property
+    # Return the high byte of the copied BC register pair.
     def b(self) -> int:
         return (self.bc >> 8) & 0xFF
 
     @property
+    # Return the low byte of the copied BC register pair.
     def c(self) -> int:
         return self.bc & 0xFF
 
     @property
+    # Return the high byte of the copied DE register pair.
     def d(self) -> int:
         return (self.de >> 8) & 0xFF
 
     @property
+    # Return the low byte of the copied DE register pair.
     def e(self) -> int:
         return self.de & 0xFF
 
     @property
+    # Return the high byte of the copied HL register pair.
     def h(self) -> int:
         return (self.hl >> 8) & 0xFF
 
     @property
+    # Return the low byte of the copied HL register pair.
     def l(self) -> int:
         return self.hl & 0xFF
 
 
+# Keep native field order, alignment and widths in sync with kokura_capi.h.
+# The framebuffer address is borrowed; reserved is not an owned Python object.
 class _CStepResult(_ct.Structure):
     _fields_ = [
         ("cycles", _ct.c_uint32),
@@ -102,6 +112,7 @@ class _CStepResult(_ct.Structure):
     ]
 
 
+# Mirror the repr(C) run result using native C bool and uint64 field alignment.
 class _CDebugRunResult(_ct.Structure):
     _fields_ = [
         ("frames_requested", _ct.c_uint64),
@@ -112,6 +123,7 @@ class _CDebugRunResult(_ct.Structure):
     ]
 
 
+# Mirror the C register snapshot; do not pack this structure or reorder its fields.
 class _CCpuSnapshot(_ct.Structure):
     _fields_ = [
         ("pc", _ct.c_uint16),
@@ -136,6 +148,8 @@ class _CCpuSnapshot(_ct.Structure):
 _DEBUG_CALLBACK = _ct.CFUNCTYPE(None, _ct.c_char_p, _ct.c_char_p, _ct.c_void_p)
 
 
+# Search frozen-executable locations first, then Cargo outputs relative to the current
+# working directory. These paths are not relative to this Python module.
 def _default_library_candidates() -> Iterable[Path]:
     if getattr(_sys, "frozen", False):
         exe_dir = Path(_sys.executable).resolve().parent
@@ -162,6 +176,8 @@ def _default_library_candidates() -> Iterable[Path]:
         yield cwd / rel
 
 
+# Load an explicit library or the first existing candidate. A loader error propagates
+# without trying later candidates; this function does not build the native library.
 def load_library(path: Optional[str | _os.PathLike[str]] = None) -> _ct.CDLL:
     if path is not None:
         return _ct.CDLL(str(path))
@@ -173,19 +189,23 @@ def load_library(path: Optional[str | _os.PathLike[str]] = None) -> _ct.CDLL:
     )
 
 
+# Copy the input into ctypes-owned contiguous storage that must survive the native call.
 def _buffer_from_bytes(data: bytes | bytearray | memoryview) -> tuple[_ct.Array[Any], int]:
     blob = bytes(data)
     return (_ct.c_uint8 * len(blob)).from_buffer_copy(blob), len(blob)
 
 
+# Keep UTF-8 bytes alive in a C-string argument; callers must avoid embedded NULs.
 def _string_arg(text: str) -> _ct.c_char_p:
     return _ct.c_char_p(text.encode("utf-8"))
 
 
+# Serialize a Python value before constructing its temporary UTF-8 C-string argument.
 def _json_arg(value: Any) -> _ct.c_char_p:
     return _string_arg(_json.dumps(value))
 
 
+# Copy ABI fields into Python-owned values; the result is not a live register view.
 def _snapshot_from_c(value: _CCpuSnapshot) -> RegisterSnapshot:
     return RegisterSnapshot(
         pc=int(value.pc),
@@ -207,16 +227,19 @@ def _snapshot_from_c(value: _CCpuSnapshot) -> RegisterSnapshot:
     )
 
 
+# Infer a 0..31 shade range when any byte exceeds three; otherwise assume 0..3.
 def _framebuffer_intensity_max(framebuffer: bytes) -> int:
     return 31 if any(pixel > 3 for pixel in framebuffer) else 3
 
 
+# Scale a nonnegative shade to an inverted intensity, rounding at the selected maximum.
 def _framebuffer_gray_to_u8(value: int, max_value: int) -> int:
     shade = min(int(value), max_value)
     scaled = (shade * 255 + (max_value // 2)) // max(max_value, 1)
     return max(0, 255 - scaled)
 
 
+# Map four shade indices through the fixed compatibility palette, clamping high indices.
 def _compat_palette_rgb(framebuffer: bytes) -> bytes:
     cgb_compat = (
         (255, 255, 214),
@@ -230,6 +253,8 @@ def _compat_palette_rgb(framebuffer: bytes) -> bytes:
     return bytes(out)
 
 
+# Prefer compatibility colors, then a matching little-endian RGB555 plane. Otherwise
+# infer the grayscale range from the supplied shade bytes.
 def _rgb_from_framebuffer(
     framebuffer: bytes,
     rgb555: Optional[bytes] = None,
@@ -256,6 +281,7 @@ def _rgb_from_framebuffer(
     return bytes(out)
 
 
+# Prefix RGB bytes with the fixed 160x144 binary PPM header; callers supply a full frame.
 def _encode_ppm(
     framebuffer: bytes,
     rgb555: Optional[bytes] = None,
@@ -266,6 +292,8 @@ def _encode_ppm(
     return bytes(out)
 
 
+# Build an uncompressed 24-bit BMP for a full 160x144 frame, with BGR pixels,
+# bottom-up rows and four-byte row alignment.
 def _encode_bmp(
     framebuffer: bytes,
     rgb555: Optional[bytes] = None,
@@ -307,6 +335,8 @@ def _encode_bmp(
     return bytes(out)
 
 
+# Encode by extension (.bmp by default) and overwrite the destination. Parent
+# directories must already exist; only BMP and PPM are supported here.
 def _write_screenshot(
     path: str | _os.PathLike[str],
     framebuffer: bytes,
@@ -328,6 +358,7 @@ def _write_screenshot(
     return target
 
 
+# Coerce and validate an inclusive, one-based capture range.
 def _normalize_video_frame_range(start_frame: int, end_frame: int) -> tuple[int, int]:
     start = int(start_frame)
     end = int(end_frame)
@@ -338,11 +369,13 @@ def _normalize_video_frame_range(start_frame: int, end_frame: int) -> tuple[int,
     return start, end
 
 
+# Map each shade to an eight-bit grayscale index using the inferred source range.
 def _framebuffer_to_grayscale_indices(framebuffer: bytes) -> bytes:
     max_value = _framebuffer_intensity_max(framebuffer)
     return bytes(_framebuffer_gray_to_u8(value, max_value) for value in framebuffer)
 
 
+# Construct the fixed 256-color table with three red, three green and two blue bits.
 def _gif332_palette() -> bytes:
     palette = bytearray()
     for index in range(256):
@@ -353,6 +386,7 @@ def _gif332_palette() -> bytes:
     return bytes(palette)
 
 
+# Require a full RGB frame and quantize each channel to the nearest 3:3:2 palette level.
 def _rgb_to_gif332_indices(rgb: bytes) -> bytes:
     if len(rgb) != 160 * 144 * 3:
         raise KokuraError("video frame had invalid RGB framebuffer length")
@@ -369,10 +403,13 @@ def _rgb_to_gif332_indices(rgb: bytes) -> bytes:
     return bytes(out)
 
 
+# Saturate integer color-conversion results to the byte range.
 def _clamp_u8(value: int) -> int:
     return 0 if value < 0 else 255 if value > 255 else value
 
 
+# Convert a complete RGB frame to separate full-resolution Y, U and V planes.
+# Integer coefficients use eight fractional bits and chroma is centered at 128.
 def _rgb_to_yuv444(rgb: bytes) -> tuple[bytes, bytes, bytes]:
     if len(rgb) != 160 * 144 * 3:
         raise KokuraError("video frame had invalid RGB framebuffer length")
@@ -393,6 +430,7 @@ def _rgb_to_yuv444(rgb: bytes) -> tuple[bytes, bytes, bytes]:
     return bytes(y_plane), bytes(u_plane), bytes(v_plane)
 
 
+# Split compressed bytes into length-prefixed blocks of at most 255 bytes, then terminate.
 def _gif_pack_subblocks(payload: bytes) -> bytes:
     out = bytearray()
     for offset in range(0, len(payload), 255):
@@ -403,6 +441,8 @@ def _gif_pack_subblocks(payload: bytes) -> bytes:
     return bytes(out)
 
 
+# Emit literal palette codes in an LZW stream, tracking decoder dictionary growth
+# for code widths and clear codes rather than searching for repeated sequences.
 def _gif_encode_indices(indices: bytes) -> bytes:
     min_code_size = 8
     clear_code = 1 << min_code_size
@@ -414,6 +454,7 @@ def _gif_encode_indices(indices: bytes) -> bytes:
     bit_buffer = 0
     bit_count = 0
 
+    # Pack the current-width code least-significant-bit first and flush complete bytes.
     def write_code(code: int) -> None:
         nonlocal bit_buffer, bit_count
         bit_buffer |= int(code) << bit_count
@@ -430,6 +471,7 @@ def _gif_encode_indices(indices: bytes) -> bytes:
             first_symbol = False
             continue
         next_code += 1
+        # Clear before the decoder dictionary exceeds the 12-bit code space.
         if next_code >= 4096:
             write_code(clear_code)
             next_code = end_code + 1
@@ -445,6 +487,8 @@ def _gif_encode_indices(indices: bytes) -> bytes:
     return _gif_pack_subblocks(bytes(packed))
 
 
+# Buffer an animated 160x144 GIF with a shared 3:3:2 palette and infinite looping.
+# Only video is stored; both the input frames and encoded output occupy memory.
 def _encode_gif_frames(rgb_frames: Iterable[bytes]) -> bytes:
     width = 160
     height = 144
@@ -467,6 +511,7 @@ def _encode_gif_frames(rgb_frames: Iterable[bytes]) -> bytes:
     delay_remainder = 0
     for rgb in frames:
         indices = _rgb_to_gif332_indices(rgb)
+        # Carry fractional centiseconds across frames instead of rounding every delay independently.
         delay_remainder += 100 * fps_den
         delay = delay_remainder // fps_num
         delay_remainder %= fps_num
@@ -488,6 +533,7 @@ def _encode_gif_frames(rgb_frames: Iterable[bytes]) -> bytes:
     return bytes(out)
 
 
+# Buffer full-resolution planar YUV frames in a progressive 59727:1000 Y4M stream.
 def _encode_y4m_frames(rgb_frames: Iterable[bytes]) -> bytes:
     frames = list(rgb_frames)
     if not frames:
@@ -502,6 +548,7 @@ def _encode_y4m_frames(rgb_frames: Iterable[bytes]) -> bytes:
     return bytes(out)
 
 
+# Choose GIF by default or Y4M by extension, then overwrite the file with buffered video.
 def _write_video(path: str | _os.PathLike[str], rgb_frames: Iterable[bytes]) -> Path:
     target = Path(path)
     suffix = target.suffix.lower()
@@ -519,15 +566,19 @@ def _write_video(path: str | _os.PathLike[str], rgb_frames: Iterable[bytes]) -> 
 
 
 class KokuraLibrary:
+    # Retain the loaded shared library and configure every required C API signature.
     def __init__(self, path: Optional[str | _os.PathLike[str]] = None):
         self.lib = load_library(path)
         self._bind()
 
+    # Declare ABI widths and pointer ownership explicitly. Returned owned strings use
+    # void pointers so ctypes cannot discard the address required by kokura_string_free.
     def _bind(self) -> None:
         lib = self.lib
         void_p = _ct.c_void_p
         c_char_p = _ct.c_char_p
 
+        # Allow an older library to omit optional color APIs; bind present symbols normally.
         def _bind_optional(
             name: str,
             argtypes: list[Any],
@@ -688,6 +739,8 @@ class KokuraLibrary:
         lib.kokura_debug_session_audio_copy_interleaved_i16.argtypes = [void_p, _ct.POINTER(_ct.c_int16), _ct.c_size_t]
         lib.kokura_debug_session_audio_copy_interleaved_i16.restype = _ct.c_size_t
 
+    # Consume one library-owned string and release it with the same library, even if UTF-8
+    # decoding fails. Never pass a borrowed or previously freed pointer here.
     def take_string(self, raw_ptr: int) -> Optional[str]:
         if not raw_ptr:
             return None
@@ -696,27 +749,36 @@ class KokuraLibrary:
         finally:
             self.lib.kokura_string_free(raw_ptr)
 
+    # Copy and release the allocated version string; a null result becomes an empty string.
     def version(self) -> str:
         return self.take_string(self.lib.kokura_version_string()) or ""
 
 
 class _BaseHandle:
+    # Retain the library for the lifetime of the native handle. Callers must serialize
+    # access to each handle; these wrappers do not provide a lock.
     def __init__(self, kokura: KokuraLibrary):
         self.kokura = kokura
         self.handle: Optional[int] = None
 
+    # Return the existing wrapper without recreating or validating its handle.
     def __enter__(self):
         return self
 
+    # Release the handle on leaving a with block without suppressing its exception.
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
+    # Delegate finalization to close; explicit context-managed cleanup is preferable.
     def __del__(self) -> None:
         self.close()
 
+    # Require each concrete handle wrapper to implement its matching native destructor.
     def close(self) -> None:
         raise NotImplementedError
 
+    # Advance from the current state and retain the inclusive relative capture range.
+    # The counter counts advance calls, not verified machine-frame progress; no rewind occurs.
     def _capture_video_frames(
         self,
         *,
@@ -743,12 +805,14 @@ class SpeedRunController:
     conditions.
     """
 
+    # Keep a positive multiplier ceiling and clamp the initial polling step to that range.
     def __init__(self, runner: Any, multiplier: int = 1, *, max_multiplier: int = 20):
         self.runner = runner
         self.max_multiplier = max(1, int(max_multiplier))
         self.multiplier = 1
         self.set_multiplier(multiplier)
 
+    # Clamp the requested logical-frame multiplier to one through the configured maximum.
     def set_multiplier(self, multiplier: int) -> None:
         value = int(multiplier)
         if value < 1:
@@ -757,12 +821,15 @@ class SpeedRunController:
             value = self.max_multiplier
         self.multiplier = value
 
+    # Ignore nonpositive requests; otherwise multiply the frame budget and discard the
+    # runner result. This changes polling granularity, not emulation clock rates.
     def run_frames(self, logical_frames: int) -> None:
         frames = int(logical_frames)
         if frames <= 0:
             return
         self.runner.run_frames(frames * self.multiplier)
 
+    # Advance one logical polling step using the current multiplier.
     def run_frame(self) -> None:
         self.run_frames(1)
 
@@ -776,16 +843,20 @@ class RewindableSpeedRunController(SpeedRunController):
     in-game clock time.
     """
 
+    # Ask the runner for its saved-state representation without changing execution.
     def checkpoint(self) -> Any:
         if not hasattr(self.runner, "save_state"):
             raise KokuraError("runner does not support save_state")
         return self.runner.save_state()
 
+    # Explicitly reload a caller-supplied checkpoint through the runner's state API.
     def rewind_to(self, checkpoint: Any) -> None:
         if not hasattr(self.runner, "load_state"):
             raise KokuraError("runner does not support load_state")
         self.runner.load_state(checkpoint)
 
+    # Save a checkpoint before running. The returned count is the requested multiplied
+    # budget, not measured progress; callers check their condition and choose whether to rewind.
     def run_frames_checked(self, logical_frames: int) -> tuple[int, Any]:
         checkpoint = self.checkpoint()
         frames = int(logical_frames)
@@ -797,27 +868,33 @@ class RewindableSpeedRunController(SpeedRunController):
 
 
 class Core(_BaseHandle):
+    # Create an owned native core; a null allocation result cannot be used as a live handle.
     def __init__(self, kokura: KokuraLibrary):
         super().__init__(kokura)
         self.handle = kokura.lib.kokura_core_create()
         if not self.handle:
             raise KokuraError("failed to create KOKURA core handle")
 
+    # Destroy the live core once, then clear the pointer so sequential closes are harmless.
     def close(self) -> None:
         handle = self.handle
         if handle:
             self.kokura.lib.kokura_core_destroy(handle)
             self.handle = None
 
+    # Keep the copied byte buffer alive until the native core has copied and loaded it.
     def load_rom(self, rom: bytes | bytearray | memoryview) -> None:
         buf, length = _buffer_from_bytes(rom)
         ok = self.kokura.lib.kokura_core_load_rom(self.handle, _ct.cast(buf, _ct.c_void_p), length)
         if not ok:
             raise KokuraError("kokura_core_load_rom failed")
 
+    # Read the entire file as bytes before passing it to the ROM loader.
     def load_rom_path(self, path: str | _os.PathLike[str]) -> None:
         self.load_rom(Path(path).read_bytes())
 
+    # Execute one native step and copy result metadata. The borrowed framebuffer pointer
+    # in the C result is deliberately not retained in StepResult.
     def step(self) -> StepResult:
         out = _CStepResult()
         ok = self.kokura.lib.kokura_core_step(self.handle, _ct.byref(out))
@@ -833,21 +910,26 @@ class Core(_BaseHandle):
             framebuffer_len=int(out.framebuffer_len),
         )
 
+    # Run one frame and translate a native failure to KokuraError; partial progress remains.
     def run_frame(self) -> None:
         ok = self.kokura.lib.kokura_core_run_frame(self.handle)
         if not ok:
             raise KokuraError("kokura_core_run_frame failed")
 
+    # Pass a nonnegative frame count fitting uint64. ctypes converts to unsigned without
+    # range validation here, so negative values are not treated as a no-op.
     def run_frames(self, frames: int) -> None:
         ok = self.kokura.lib.kokura_core_run_frames(self.handle, int(frames))
         if not ok:
             raise KokuraError("kokura_core_run_frames failed")
 
+    # Apply the low eight bits of the input mask through the native joypad path.
     def set_joypad_mask(self, mask: int) -> None:
         ok = self.kokura.lib.kokura_core_set_joypad_mask(self.handle, int(mask) & 0xFF)
         if not ok:
             raise KokuraError("kokura_core_set_joypad_mask failed")
 
+    # Copy a native CPU snapshot into independent Python register and timing values.
     def registers(self) -> RegisterSnapshot:
         out = _CCpuSnapshot()
         ok = self.kokura.lib.kokura_core_cpu_snapshot(self.handle, _ct.byref(out))
@@ -855,12 +937,15 @@ class Core(_BaseHandle):
             raise KokuraError("kokura_core_cpu_snapshot failed")
         return _snapshot_from_c(out)
 
+    # Wrap the address to 16 bits and observe memory without bus-read side effects.
     def peek8(self, addr: int) -> int:
         return int(self.kokura.lib.kokura_core_peek8(self.handle, int(addr) & 0xFFFF))
 
+    # Wrap the address to 16 bits and perform a bus read with device side effects.
     def read8(self, addr: int) -> int:
         return int(self.kokura.lib.kokura_core_read8(self.handle, int(addr) & 0xFFFF))
 
+    # Wrap the address and value to 16 and eight bits, then perform an ordinary bus write.
     def write8(self, addr: int, value: int) -> None:
         ok = self.kokura.lib.kokura_core_write8(
             self.handle, int(addr) & 0xFFFF, int(value) & 0xFF
@@ -868,14 +953,20 @@ class Core(_BaseHandle):
         if not ok:
             raise KokuraError("kokura_core_write8 failed")
 
+    # Read consecutive bytes, wrapping at 0xFFFF. Use side-effect-free peeks by default;
+    # a nonpositive size yields empty bytes.
     def read_block(self, addr: int, size: int, *, side_effects: bool = False) -> bytes:
         reader = self.read8 if side_effects else self.peek8
         return bytes(reader(addr + offset) for offset in range(size))
 
+    # Copy the input and write sequentially through the bus with 16-bit address wrapping.
+    # Earlier writes remain applied if a later call fails.
     def write_block(self, addr: int, data: bytes | bytearray | memoryview) -> None:
         for offset, value in enumerate(bytes(data)):
             self.write8(addr + offset, value)
 
+    # Copy borrowed framebuffer storage immediately into Python bytes. Serialize handle
+    # access so no execution or destruction can intervene between pointer, length and copy.
     def framebuffer_bytes(self) -> bytes:
         ptr = self.kokura.lib.kokura_core_framebuffer_ptr(self.handle)
         length = int(self.kokura.lib.kokura_core_framebuffer_len(self.handle))
@@ -883,6 +974,8 @@ class Core(_BaseHandle):
             return b""
         return _ct.string_at(ptr, length)
 
+    # Copy two bytes per native color word; an absent optional API or null buffer yields
+    # empty bytes. The source pointer remains borrowed only during this synchronized copy.
     def framebuffer_rgb555_bytes(self) -> bytes:
         if not self.kokura.has_core_color_framebuffer_api:
             return b""
@@ -892,17 +985,21 @@ class Core(_BaseHandle):
             return b""
         return _ct.string_at(ptr, length * 2)
 
+    # Decode the copied color bytes as little-endian words for the supported native ABI.
     def framebuffer_rgb555_words(self) -> tuple[int, ...]:
         raw = self.framebuffer_rgb555_bytes()
         if not raw:
             return ()
         return tuple(value for (value,) in _struct.iter_unpack("<H", raw))
 
+    # Query compatibility coloring when supported; older libraries default to false.
     def is_cgb_compat_mode(self) -> bool:
         if not self.kokura.has_core_cgb_compat_api:
             return False
         return bool(self.kokura.lib.kokura_core_is_cgb_compat_mode(self.handle))
 
+    # Combine the current shade/color copies into RGB; callers serialize access to keep
+    # the separate native observations from straddling an emulation step.
     def framebuffer_rgb_bytes(self) -> bytes:
         return _rgb_from_framebuffer(
             self.framebuffer_bytes(),
@@ -910,6 +1007,7 @@ class Core(_BaseHandle):
             self.is_cgb_compat_mode(),
         )
 
+    # Write the current copied image without advancing the machine; use .bmp or .ppm.
     def save_screenshot(self, path: str | _os.PathLike[str]) -> Path:
         framebuffer = self.framebuffer_bytes()
         return _write_screenshot(
@@ -919,6 +1017,8 @@ class Core(_BaseHandle):
             self.is_cgb_compat_mode(),
         )
 
+    # Advance the current machine through end_frame and buffer the selected relative
+    # frames before writing silent video; recording does not restore the starting state.
     def save_video(
         self,
         path: str | _os.PathLike[str],
@@ -934,12 +1034,16 @@ class Core(_BaseHandle):
         )
         return _write_video(path, frames)
 
+    # Return the native cartridge controller's current ROM-bank label.
     def current_rom_bank(self) -> int:
         return int(self.kokura.lib.kokura_core_current_rom_bank(self.handle))
 
+    # Return the native cartridge controller's current RAM-bank label.
     def current_ram_bank(self) -> int:
         return int(self.kokura.lib.kokura_core_current_ram_bank(self.handle))
 
+    # Copy and decode the owned JSON MachineState, including cartridge data, then free
+    # the native string. This dictionary is not a binary KQS snapshot.
     def save_state(self) -> dict[str, Any]:
         raw = self.kokura.lib.kokura_core_save_state_json(self.handle)
         text = self.kokura.take_string(raw)
@@ -947,23 +1051,31 @@ class Core(_BaseHandle):
             raise KokuraError("kokura_core_save_state_json returned null")
         return _json.loads(text)
 
+    # Serialize the dictionary for the native JSON loader. Use a valid compatible
+    # MachineState; this wrapper adds no invariant or currently loaded ROM identity check.
     def load_state(self, state: dict[str, Any]) -> None:
         ok = self.kokura.lib.kokura_core_load_state_json(self.handle, _json_arg(state))
         if not ok:
             raise KokuraError("kokura_core_load_state_json failed")
 
+    # Return the native audio output rate in stereo sample frames per second.
     def audio_sample_rate(self) -> int:
         return int(self.kokura.lib.kokura_core_audio_sample_rate(self.handle))
 
+    # Return the queued stereo-frame count without draining samples.
     def audio_frames_available(self) -> int:
         return int(self.kokura.lib.kokura_core_audio_frames_available(self.handle))
 
+    # Return the native count of audio frames discarded by buffer overflow.
     def audio_frames_dropped(self) -> int:
         return int(self.kokura.lib.kokura_core_audio_frames_dropped(self.handle))
 
+    # Return total queue capacity in stereo frames, not individual channel samples.
     def audio_buffer_capacity_frames(self) -> int:
         return int(self.kokura.lib.kokura_core_audio_buffer_capacity_frames(self.handle))
 
+    # Pass a nonnegative capacity fitting size_t; this wrapper does not validate the
+    # unsigned conversion before asking the native queue to resize.
     def set_audio_buffer_capacity_frames(self, capacity_frames: int) -> None:
         ok = self.kokura.lib.kokura_core_set_audio_buffer_capacity_frames(
             self.handle, int(capacity_frames)
@@ -971,6 +1083,8 @@ class Core(_BaseHandle):
         if not ok:
             raise KokuraError("kokura_core_set_audio_buffer_capacity_frames failed")
 
+    # Allocate two signed 16-bit samples per requested stereo frame, destructively drain
+    # up to that budget, and copy only returned frames into Python (left, right) tuples.
     def drain_audio_frames(self, max_frames: Optional[int] = None) -> list[tuple[int, int]]:
         frames_to_copy = self.audio_frames_available() if max_frames is None else int(max_frames)
         if frames_to_copy <= 0:
@@ -986,6 +1100,7 @@ class Core(_BaseHandle):
 
 
 class DebugSession(_BaseHandle):
+    # Create an owned debug session and retain callback state separately from the C handle.
     def __init__(self, kokura: KokuraLibrary):
         super().__init__(kokura)
         self.handle = kokura.lib.kokura_debug_session_create()
@@ -994,6 +1109,7 @@ class DebugSession(_BaseHandle):
         self._callback_ref: Optional[_DEBUG_CALLBACK] = None
         self._callback_error: Optional[BaseException] = None
 
+    # Destroy the native session before dropping its callback reference and deferred error.
     def close(self) -> None:
         handle = self.handle
         if handle:
@@ -1002,18 +1118,23 @@ class DebugSession(_BaseHandle):
         self._callback_ref = None
         self._callback_error = None
 
+    # Copy and free the native error string, using the supplied fallback if it is empty.
     def _raise_last_error(self, fallback: str) -> None:
         text = self.kokura.take_string(
             self.kokura.lib.kokura_debug_session_last_error(self.handle)
         )
         raise KokuraError(text or fallback)
 
+    # Clear a deferred callback exception and raise its representation as KokuraError
+    # after native execution has returned.
     def _raise_pending_callback_error(self) -> None:
         error = self._callback_error
         if error is not None:
             self._callback_error = None
             raise KokuraError(f"python callback failed: {error!r}")
 
+    # Keep the input copy alive during native loading; a successful load creates a fresh
+    # debug session while retaining the handle's maps and callback configuration.
     def load_rom(self, rom: bytes | bytearray | memoryview) -> None:
         buf, length = _buffer_from_bytes(rom)
         ok = self.kokura.lib.kokura_debug_session_load_rom(
@@ -1022,9 +1143,11 @@ class DebugSession(_BaseHandle):
         if not ok:
             self._raise_last_error("kokura_debug_session_load_rom failed")
 
+    # Read the complete ROM file before invoking the byte-buffer loading path.
     def load_rom_path(self, path: str | _os.PathLike[str]) -> None:
         self.load_rom(Path(path).read_bytes())
 
+    # Pass NUL-free UTF-8 symbol-map text; the native bridge replaces the symbol entries.
     def load_symbol_map_text(self, text: str) -> None:
         ok = self.kokura.lib.kokura_debug_session_load_symbol_map_text(
             self.handle, _string_arg(text)
@@ -1032,9 +1155,11 @@ class DebugSession(_BaseHandle):
         if not ok:
             self._raise_last_error("kokura_debug_session_load_symbol_map_text failed")
 
+    # Decode a symbol-map file as UTF-8 before passing its contents to the native parser.
     def load_symbol_map_path(self, path: str | _os.PathLike[str]) -> None:
         self.load_symbol_map_text(Path(path).read_text(encoding="utf-8"))
 
+    # Pass NUL-free UTF-8 source-map text to replace the bridge's source-position entries.
     def load_source_map_text(self, text: str) -> None:
         ok = self.kokura.lib.kokura_debug_session_load_source_map_text(
             self.handle, _string_arg(text)
@@ -1042,9 +1167,11 @@ class DebugSession(_BaseHandle):
         if not ok:
             self._raise_last_error("kokura_debug_session_load_source_map_text failed")
 
+    # Decode the complete source-map file as UTF-8 before applying it.
     def load_source_map_path(self, path: str | _os.PathLike[str]) -> None:
         self.load_source_map_text(Path(path).read_text(encoding="utf-8"))
 
+    # Serialize a complete combined symbol/source table for native decoding and replacement.
     def load_symbol_table(self, value: dict[str, Any]) -> None:
         ok = self.kokura.lib.kokura_debug_session_load_symbol_table_json(
             self.handle, _json_arg(value)
@@ -1052,11 +1179,13 @@ class DebugSession(_BaseHandle):
         if not ok:
             self._raise_last_error("kokura_debug_session_load_symbol_table_json failed")
 
+    # Clear both symbol and source-position mappings through the native bridge.
     def clear_symbol_table(self) -> None:
         ok = self.kokura.lib.kokura_debug_session_clear_symbol_table(self.handle)
         if not ok:
             self._raise_last_error("kokura_debug_session_clear_symbol_table failed")
 
+    # Submit structured stop conditions; native validation determines accepted values.
     def set_stop_conditions(self, value: dict[str, Any]) -> None:
         ok = self.kokura.lib.kokura_debug_session_set_stop_conditions_json(
             self.handle, _json_arg(value)
@@ -1064,11 +1193,13 @@ class DebugSession(_BaseHandle):
         if not ok:
             self._raise_last_error("kokura_debug_session_set_stop_conditions_json failed")
 
+    # Remove configured stop conditions from the native debug session.
     def clear_stop_conditions(self) -> None:
         ok = self.kokura.lib.kokura_debug_session_clear_stop_conditions(self.handle)
         if not ok:
             self._raise_last_error("kokura_debug_session_clear_stop_conditions failed")
 
+    # Submit structured replay control for validation and installation in the session.
     def set_replay_control(self, value: dict[str, Any]) -> None:
         ok = self.kokura.lib.kokura_debug_session_set_replay_control_json(
             self.handle, _json_arg(value)
@@ -1076,11 +1207,13 @@ class DebugSession(_BaseHandle):
         if not ok:
             self._raise_last_error("kokura_debug_session_set_replay_control_json failed")
 
+    # Remove configured replay control through the native session API.
     def clear_replay_control(self) -> None:
         ok = self.kokura.lib.kokura_debug_session_clear_replay_control(self.handle)
         if not ok:
             self._raise_last_error("kokura_debug_session_clear_replay_control failed")
 
+    # Apply the low eight bits of the input mask through the native joypad path.
     def set_joypad_mask(self, mask: int) -> None:
         ok = self.kokura.lib.kokura_debug_session_set_joypad_mask(
             self.handle, int(mask) & 0xFF
@@ -1088,6 +1221,8 @@ class DebugSession(_BaseHandle):
         if not ok:
             self._raise_last_error("kokura_debug_session_set_joypad_mask failed")
 
+    # Materialize event types and optional frame interval into the native callback filter.
+    # An empty event list selects no event types; stop notifications default to enabled.
     def set_callback_config(
         self,
         *,
@@ -1106,11 +1241,14 @@ class DebugSession(_BaseHandle):
         if not ok:
             self._raise_last_error("kokura_debug_session_set_callback_config_json failed")
 
+    # Restore native default callback filters without unregistering the callback.
     def clear_callback_config(self) -> None:
         ok = self.kokura.lib.kokura_debug_session_clear_callback_config(self.handle)
         if not ok:
             self._raise_last_error("kokura_debug_session_clear_callback_config failed")
 
+    # Install filters and retain the ctypes callback so native code cannot outlive it.
+    # The callback must not reenter or destroy this same native session.
     def set_callback(
         self,
         callback: Callable[[str, Any], None],
@@ -1125,6 +1263,8 @@ class DebugSession(_BaseHandle):
             emit_stop=emit_stop,
         )
 
+        # Decode temporary callback strings immediately. Defer any Python exception until
+        # run_frames returns, suppressing later callbacks while that exception is pending.
         def _dispatch(kind: bytes, payload_json: bytes, _user_data: int) -> None:
             if self._callback_error is not None:
                 return
@@ -1141,9 +1281,11 @@ class DebugSession(_BaseHandle):
         )
         if not ok:
             self._raise_last_error("kokura_debug_session_set_callback failed")
+        # Hold a strong reference for as long as native code may call this function pointer.
         self._callback_ref = callback_ref
         self._callback_error = None
 
+    # Unregister natively before releasing the Python callback and any deferred exception.
     def clear_callback(self) -> None:
         ok = self.kokura.lib.kokura_debug_session_clear_callback(self.handle)
         if not ok:
@@ -1151,6 +1293,8 @@ class DebugSession(_BaseHandle):
         self._callback_ref = None
         self._callback_error = None
 
+    # Submit a nonnegative uint64 frame budget. Re-raise deferred Python callback errors
+    # before native run errors; return actual native stop flags and net frame progress.
     def run_frames(self, frames: int) -> DebugRunResult:
         out = _CDebugRunResult()
         ok = self.kokura.lib.kokura_debug_session_run_frames(
@@ -1167,6 +1311,7 @@ class DebugSession(_BaseHandle):
             halted_on_unsupported_opcode=bool(out.halted_on_unsupported_opcode),
         )
 
+    # Request a nonnegative uint64 rewind distance; the native session reports unavailable history.
     def rewind_frames(self, frames_back: int) -> None:
         ok = self.kokura.lib.kokura_debug_session_rewind_frames(
             self.handle, int(frames_back)
@@ -1174,6 +1319,7 @@ class DebugSession(_BaseHandle):
         if not ok:
             self._raise_last_error("kokura_debug_session_rewind_frames failed")
 
+    # Copy and free the native report JSON, then decode it into Python-owned objects.
     def report(self) -> dict[str, Any]:
         text = self.kokura.take_string(
             self.kokura.lib.kokura_debug_session_report_json(self.handle)
@@ -1182,6 +1328,7 @@ class DebugSession(_BaseHandle):
             self._raise_last_error("kokura_debug_session_report_json returned null")
         return _json.loads(text)
 
+    # Copy, free and decode the session's owned JSON state string.
     def save_state(self) -> dict[str, Any]:
         text = self.kokura.take_string(
             self.kokura.lib.kokura_debug_session_save_state_json(self.handle)
@@ -1190,6 +1337,7 @@ class DebugSession(_BaseHandle):
             self._raise_last_error("kokura_debug_session_save_state_json returned null")
         return _json.loads(text)
 
+    # Serialize the supplied state for the native loader and surface its validation error.
     def load_state(self, state: dict[str, Any]) -> None:
         ok = self.kokura.lib.kokura_debug_session_load_state_json(
             self.handle, _json_arg(state)
@@ -1197,6 +1345,8 @@ class DebugSession(_BaseHandle):
         if not ok:
             self._raise_last_error("kokura_debug_session_load_state_json failed")
 
+    # Decode an owned reason string; both JSON null and a null native pointer become None.
+    # Inspect last_error separately if a native failure must be distinguished from no reason.
     def stop_reason(self) -> Optional[dict[str, Any]]:
         text = self.kokura.take_string(
             self.kokura.lib.kokura_debug_session_stop_reason_json(self.handle)
@@ -1205,16 +1355,19 @@ class DebugSession(_BaseHandle):
             return None
         return _json.loads(text)
 
+    # Return a copied native error message without clearing the session's stored error.
     def last_error(self) -> Optional[str]:
         return self.kokura.take_string(
             self.kokura.lib.kokura_debug_session_last_error(self.handle)
         )
 
+    # Explicitly clear the native error slot and report an invalid-handle failure.
     def clear_last_error(self) -> None:
         ok = self.kokura.lib.kokura_debug_session_clear_last_error(self.handle)
         if not ok:
             raise KokuraError("kokura_debug_session_clear_last_error failed")
 
+    # Copy a native CPU snapshot into independent Python register and timing values.
     def registers(self) -> RegisterSnapshot:
         out = _CCpuSnapshot()
         ok = self.kokura.lib.kokura_debug_session_cpu_snapshot(
@@ -1224,16 +1377,19 @@ class DebugSession(_BaseHandle):
             self._raise_last_error("kokura_debug_session_cpu_snapshot failed")
         return _snapshot_from_c(out)
 
+    # Wrap the address to 16 bits and observe memory without bus-read side effects.
     def peek8(self, addr: int) -> int:
         return int(
             self.kokura.lib.kokura_debug_session_peek8(self.handle, int(addr) & 0xFFFF)
         )
 
+    # Wrap the address to 16 bits and perform a bus read with device side effects.
     def read8(self, addr: int) -> int:
         return int(
             self.kokura.lib.kokura_debug_session_read8(self.handle, int(addr) & 0xFFFF)
         )
 
+    # Wrap the address and value to 16 and eight bits, then perform an ordinary bus write.
     def write8(self, addr: int, value: int) -> None:
         ok = self.kokura.lib.kokura_debug_session_write8(
             self.handle, int(addr) & 0xFFFF, int(value) & 0xFF
@@ -1241,14 +1397,20 @@ class DebugSession(_BaseHandle):
         if not ok:
             self._raise_last_error("kokura_debug_session_write8 failed")
 
+    # Read consecutive bytes, wrapping at 0xFFFF. Use side-effect-free peeks by default;
+    # a nonpositive size yields empty bytes.
     def read_block(self, addr: int, size: int, *, side_effects: bool = False) -> bytes:
         reader = self.read8 if side_effects else self.peek8
         return bytes(reader(addr + offset) for offset in range(size))
 
+    # Copy the input and write sequentially through the bus with 16-bit address wrapping.
+    # Earlier writes remain applied if a later call fails.
     def write_block(self, addr: int, data: bytes | bytearray | memoryview) -> None:
         for offset, value in enumerate(bytes(data)):
             self.write8(addr + offset, value)
 
+    # Copy borrowed framebuffer storage immediately into Python bytes. Serialize handle
+    # access so no execution or destruction can intervene between pointer, length and copy.
     def framebuffer_bytes(self) -> bytes:
         ptr = self.kokura.lib.kokura_debug_session_framebuffer_ptr(self.handle)
         length = int(self.kokura.lib.kokura_debug_session_framebuffer_len(self.handle))
@@ -1256,6 +1418,8 @@ class DebugSession(_BaseHandle):
             return b""
         return _ct.string_at(ptr, length)
 
+    # Copy two bytes per native color word; an absent optional API or null buffer yields
+    # empty bytes. The source pointer remains borrowed only during this synchronized copy.
     def framebuffer_rgb555_bytes(self) -> bytes:
         if not self.kokura.has_debug_color_framebuffer_api:
             return b""
@@ -1267,12 +1431,14 @@ class DebugSession(_BaseHandle):
             return b""
         return _ct.string_at(ptr, length * 2)
 
+    # Decode the copied color bytes as little-endian words for the supported native ABI.
     def framebuffer_rgb555_words(self) -> tuple[int, ...]:
         raw = self.framebuffer_rgb555_bytes()
         if not raw:
             return ()
         return tuple(value for (value,) in _struct.iter_unpack("<H", raw))
 
+    # Query compatibility coloring when supported; older libraries default to false.
     def is_cgb_compat_mode(self) -> bool:
         if not self.kokura.has_debug_cgb_compat_api:
             return False
@@ -1280,6 +1446,8 @@ class DebugSession(_BaseHandle):
             self.kokura.lib.kokura_debug_session_is_cgb_compat_mode(self.handle)
         )
 
+    # Combine the current shade/color copies into RGB; callers serialize access to keep
+    # the separate native observations from straddling an emulation step.
     def framebuffer_rgb_bytes(self) -> bytes:
         return _rgb_from_framebuffer(
             self.framebuffer_bytes(),
@@ -1287,6 +1455,7 @@ class DebugSession(_BaseHandle):
             self.is_cgb_compat_mode(),
         )
 
+    # Write the current copied image without advancing the machine; use .bmp or .ppm.
     def save_screenshot(self, path: str | _os.PathLike[str]) -> Path:
         framebuffer = self.framebuffer_bytes()
         return _write_screenshot(
@@ -1296,6 +1465,8 @@ class DebugSession(_BaseHandle):
             self.is_cgb_compat_mode(),
         )
 
+    # Buffer captures after successive one-frame run requests. Debugger stops can prevent
+    # progress, so this loop may capture repeated frames; recording does not rewind afterward.
     def save_video(
         self,
         path: str | _os.PathLike[str],
@@ -1311,24 +1482,30 @@ class DebugSession(_BaseHandle):
         )
         return _write_video(path, frames)
 
+    # Return the native audio output rate in stereo sample frames per second.
     def audio_sample_rate(self) -> int:
         return int(self.kokura.lib.kokura_debug_session_audio_sample_rate(self.handle))
 
+    # Return the queued stereo-frame count without draining samples.
     def audio_frames_available(self) -> int:
         return int(
             self.kokura.lib.kokura_debug_session_audio_frames_available(self.handle)
         )
 
+    # Return the native count of audio frames discarded by buffer overflow.
     def audio_frames_dropped(self) -> int:
         return int(
             self.kokura.lib.kokura_debug_session_audio_frames_dropped(self.handle)
         )
 
+    # Return total queue capacity in stereo frames, not individual channel samples.
     def audio_buffer_capacity_frames(self) -> int:
         return int(
             self.kokura.lib.kokura_debug_session_audio_buffer_capacity_frames(self.handle)
         )
 
+    # Pass a nonnegative capacity fitting size_t; this wrapper does not validate the
+    # unsigned conversion before asking the native queue to resize.
     def set_audio_buffer_capacity_frames(self, capacity_frames: int) -> None:
         ok = self.kokura.lib.kokura_debug_session_set_audio_buffer_capacity_frames(
             self.handle, int(capacity_frames)
@@ -1338,6 +1515,8 @@ class DebugSession(_BaseHandle):
                 "kokura_debug_session_set_audio_buffer_capacity_frames failed"
             )
 
+    # Allocate two signed 16-bit samples per requested stereo frame, destructively drain
+    # up to that budget, and copy only returned frames into Python (left, right) tuples.
     def drain_audio_frames(self, max_frames: Optional[int] = None) -> list[tuple[int, int]]:
         frames_to_copy = self.audio_frames_available() if max_frames is None else int(max_frames)
         if frames_to_copy <= 0:

@@ -23,6 +23,8 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Envelope metadata used to detect incompatible files or a mismatched
+// embedded ROM; the checksum is non-cryptographic.
 pub struct StateFileHeader {
     pub magic: [u8; 4],
     pub version: u32,
@@ -38,6 +40,8 @@ struct StateFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Serialized restore payload. Cartridge storage is included; debugger
+// session state and other fields absent from this type remain outside it.
 pub struct MachineState {
     pub version: u32,
     pub cpu: Cpu,
@@ -61,6 +65,8 @@ impl MachineState {
     pub const CURRENT_VERSION: u32 = 7;
     pub const FILE_MAGIC: [u8; 4] = *b"KQS1";
 
+    // Clone the serialized CPU/device/memory/clock fields, including cartridge
+    // ROM bytes. Machine fields outside this structure are not captured.
     pub fn from_machine(machine: &Machine) -> Self {
         Self {
             version: Self::CURRENT_VERSION,
@@ -82,6 +88,9 @@ impl MachineState {
         }
     }
 
+    // Replace the fields represented by this state, including the cartridge,
+    // then clear active interrupt context and rebuild PPU runtime data. Callers
+    // must perform validation and any live-ROM identity check before applying.
     pub fn apply_to(&self, machine: &mut Machine) {
         machine.cpu = self.cpu.clone();
         machine.ppu = self.ppu.clone();
@@ -102,6 +111,8 @@ impl MachineState {
         machine.ppu.restore_runtime_state(&machine.memory);
     }
 
+    // Fold ROM bytes with a zero-seeded wrapping multiply/XOR checksum.
+    // This is an identity hint, not a cryptographic integrity guarantee.
     pub fn rom_checksum(&self) -> u32 {
         self.cartridge
             .rom
@@ -109,6 +120,8 @@ impl MachineState {
             .fold(0u32, |acc, &b| acc.wrapping_mul(16777619) ^ b as u32)
     }
 
+    // Describe the embedded ROM and current file format version. The payload
+    // version is checked separately when loading.
     pub fn file_header(&self) -> StateFileHeader {
         StateFileHeader {
             magic: Self::FILE_MAGIC,
@@ -119,6 +132,8 @@ impl MachineState {
         }
     }
 
+    // Serialize a header and boxed state clone, including ROM data, into
+    // a bincode byte vector; this method does not validate the source state.
     pub fn to_bytes(&self) -> Result<Vec<u8>, CoreError> {
         let file = StateFile {
             header: self.file_header(),
@@ -127,6 +142,8 @@ impl MachineState {
         Ok(bincode::serialize(&file)?)
     }
 
+    // Deserialize the envelope, verify its embedded-ROM metadata, and check
+    // payload version/framebuffer length before returning the unboxed state.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, CoreError> {
         let file: StateFile = bincode::deserialize(bytes)?;
         file.validate()?;
@@ -134,6 +151,8 @@ impl MachineState {
         Ok(*file.state)
     }
 
+    // Serialize the header and cloned payload to the supplied writer,
+    // propagating serialization/write errors without explicitly flushing it.
     pub fn save_to_writer<W: std::io::Write>(&self, writer: W) -> Result<(), CoreError> {
         let file = StateFile {
             header: self.file_header(),
@@ -143,6 +162,8 @@ impl MachineState {
         Ok(())
     }
 
+    // Decode and validate the envelope and payload while retaining the
+    // heap-allocated state. Validation occurs after deserialization.
     pub fn load_boxed_from_reader<R: std::io::Read>(reader: R) -> Result<Box<Self>, CoreError> {
         let file: StateFile = bincode::deserialize_from(reader)?;
         file.validate()?;
@@ -150,6 +171,8 @@ impl MachineState {
         Ok(file.state)
     }
 
+    // Create or truncate the destination and serialize through a buffered
+    // writer. This path does not use atomic replacement or an explicit flush.
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> Result<(), CoreError> {
         let file = File::create(path)?;
         let writer = BufWriter::new(file);
@@ -157,16 +180,21 @@ impl MachineState {
         Ok(())
     }
 
+    // Use the boxed file loader and move the decoded state out of its box.
     pub fn load_from_path<P: AsRef<Path>>(path: P) -> Result<Self, CoreError> {
         Ok(*Self::load_boxed_from_path(path)?)
     }
 
+    // Open a buffered file reader and delegate decoding and validation
+    // to the boxed reader path.
     pub fn load_boxed_from_path<P: AsRef<Path>>(path: P) -> Result<Box<Self>, CoreError> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         Self::load_boxed_from_reader(reader)
     }
 
+    // Check the supported payload version and 160 by 144 framebuffer length.
+    // Other device fields and memory-vector lengths are not checked here.
     pub fn validate(&self) -> Result<(), CoreError> {
         if self.version != Self::CURRENT_VERSION {
             return Err(CoreError::InvalidState(format!(
@@ -181,6 +209,8 @@ impl MachineState {
         Ok(())
     }
 
+    // Compare the stored cartridge title, size and checksum with the live
+    // machine ROM. This explicit check is separate from envelope validation.
     pub fn validate_header_against_machine(&self, machine: &Machine) -> Result<(), CoreError> {
         let expected_title = machine.cartridge.header.title.clone();
         let expected_size = machine.cartridge.rom.len() as u32;
@@ -213,6 +243,8 @@ impl MachineState {
 }
 
 impl StateFile {
+    // Reject unknown magic/version and header metadata that disagrees with
+    // the embedded ROM. This does not compare against an external machine.
     fn validate(&self) -> Result<(), CoreError> {
         if self.header.magic != MachineState::FILE_MAGIC {
             let magic = self.header.magic;
@@ -263,6 +295,8 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    // Build a synthetic 32 KiB ROM-only fixture with a program at the entry
+    // point and no external cartridge RAM.
     fn make_test_rom(program: &[u8]) -> Vec<u8> {
         let mut rom = vec![0u8; 0x8000];
         rom[0x0100..0x0100 + program.len()].copy_from_slice(program);
@@ -272,6 +306,7 @@ mod tests {
         rom
     }
 
+    // Add a wall-clock nanosecond suffix to the temporary state-file name.
     fn unique_temp_path(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -281,6 +316,8 @@ mod tests {
     }
 
     #[test]
+    // Exercise saving and boxed file loading, compare PC, LY and the LCDC
+    // memory byte, and remove the temporary file. This is not full-state equality.
     fn boxed_state_roundtrip_from_path() {
         let mut machine = Machine::new();
         machine.load_rom(make_test_rom(&[0x00])).unwrap();

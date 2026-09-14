@@ -30,6 +30,8 @@ pub struct Mbc6 {
 }
 
 impl Default for Mbc6 {
+    // Allocate erased 1 MiB flash and 256-byte hidden storage, select
+    // ROM windows zero/one, disable RAM/flash access and reset command modes.
     fn default() -> Self {
         Self {
             rom_bank_a: 0,
@@ -56,14 +58,19 @@ impl Default for Mbc6 {
 }
 
 impl Mbc6 {
+    // Report window A only; window B and ROM-versus-flash selection
+    // are not represented by this single diagnostic bank number.
     pub fn current_rom_bank(&self) -> u16 {
         self.rom_bank_a as u16
     }
 
+    // Report RAM window A only; window B has an independent selector.
     pub fn current_ram_bank(&self) -> u16 {
         self.ram_bank_a as u16
     }
 
+    // Read fixed lower ROM and independently selected 8 KiB ROM/flash
+    // windows A and B, returning FF outside the cartridge ROM address range.
     pub fn read_rom(&self, rom: &[u8], addr: u16) -> u8 {
         match addr {
             0x0000..=0x3FFF => rom.get(addr as usize).copied().unwrap_or(0xFF),
@@ -77,6 +84,8 @@ impl Mbc6 {
         }
     }
 
+    // Gate access and route A000-AFFF/B000-BFFF through independent
+    // wrapped 4 KiB RAM banks; other addresses return FF.
     pub fn read_ram(&self, ram: &[u8], addr: u16) -> u8 {
         if !self.ram_enabled {
             return 0xFF;
@@ -94,6 +103,8 @@ impl Mbc6 {
         }
     }
 
+    // Write an existing byte in an enabled, independently selected
+    // 4 KiB RAM window; ignore disabled or out-of-window accesses.
     pub fn write_ram(&mut self, ram: &mut [u8], addr: u16, value: u8) {
         if !self.ram_enabled {
             return;
@@ -111,6 +122,9 @@ impl Mbc6 {
         }
     }
 
+    // Give selected flash-window writes priority when flash is enabled;
+    // otherwise decode RAM gates, bank selectors and flash controls. Disabling
+    // flash exits command modes without erasing its backing storage.
     pub fn write(&mut self, addr: u16, value: u8) {
         if self.flash_enabled && self.flash_region_selected(addr) {
             self.write_flash(addr, value);
@@ -136,8 +150,11 @@ impl Mbc6 {
         }
     }
 
+    // Do no per-cycle work: flash commands complete synchronously in this model.
     pub fn tick(&mut self, _cycles: u32) {}
 
+    // Resolve the byte offset within window A/B, then select ROM or
+    // enabled flash. A selected but disabled flash region reads FF.
     fn read_switchable_region(&self, rom: &[u8], addr: u16, bank: u8, flash_selected: bool) -> u8 {
         let offset = match addr {
             0x4000..=0x5FFF => (addr as usize) - 0x4000,
@@ -155,6 +172,9 @@ impl Mbc6 {
         read_rom_bank(rom, bank as usize, 0x2000, offset)
     }
 
+    // Prioritize ID, status and hidden modes before ordinary flash bytes.
+    // ID uses fixed values at offsets zero/one; hidden storage mirrors every
+    // 256 bytes and normal storage wraps within the allocated flash size.
     fn read_flash(&self, bank: u8, offset: usize) -> u8 {
         if self.flash_id_mode {
             return match offset {
@@ -181,12 +201,18 @@ impl Mbc6 {
             .unwrap_or(0xFF)
     }
 
+    // Check whether the addressed 8 KiB window selects flash, independently
+    // of the global flash-enable latch checked by the caller.
     fn flash_region_selected(&self, addr: u16) -> bool {
         matches!(addr, 0x4000..=0x5FFF if self.rom_bank_a_flash)
             || matches!(addr, 0x6000..=0x7FFF if self.rom_bank_b_flash)
     }
 
+    // Handle reset or a pending one-byte program first, then retain up to
+    // six absolute-address writes to recognize command sequences. Programming
+    // only clears bits; program/erase operations enter status immediately.
     fn write_flash(&mut self, addr: u16, value: u8) {
+        // Reset takes priority even while waiting for a program data byte.
         if value == 0xF0 {
             self.exit_flash_modes();
             return;
@@ -196,6 +222,8 @@ impl Mbc6 {
             return;
         };
 
+        // Hidden-byte programming requires write enable and uses the low
+        // eight address bits; the following status transition is unconditional.
         if self.flash_program_hidden_mode {
             if self.flash_write_enabled {
                 let index = (absolute as usize) & 0xFF;
@@ -217,6 +245,8 @@ impl Mbc6 {
             return;
         }
 
+        // Command addresses refer to absolute flash offsets, not the CPU
+        // window addresses used to reach those offsets.
         self.command_history.push((absolute, value));
         if self.command_history.len() > 6 {
             self.command_history.remove(0);
@@ -328,6 +358,8 @@ impl Mbc6 {
             self.enter_flash_status();
             return;
         }
+        // Sector erase accepts its final 30 command at the target sector
+        // address after the five fixed unlock/erase-prefix writes.
         if self.command_history.len() >= 6
             && self.matches_history_slice(
                 self.command_history.len() - 6,
@@ -347,6 +379,8 @@ impl Mbc6 {
         }
     }
 
+    // Translate a selected flash-window CPU address into its bank-relative
+    // absolute flash address; reject other windows.
     fn flash_absolute_address(&self, addr: u16) -> Option<u32> {
         match addr {
             0x4000..=0x5FFF if self.rom_bank_a_flash => {
@@ -359,6 +393,8 @@ impl Mbc6 {
         }
     }
 
+    // Compare a command pattern against the most recent history entries,
+    // returning false until enough writes have been collected.
     fn matches_tail(&self, pattern: &[(Option<u32>, u8)]) -> bool {
         if self.command_history.len() < pattern.len() {
             return false;
@@ -366,6 +402,8 @@ impl Mbc6 {
         self.matches_history_slice(self.command_history.len() - pattern.len(), pattern)
     }
 
+    // Match values and optional absolute addresses within a bounded
+    // history slice; None in the pattern accepts any address.
     fn matches_history_slice(&self, start: usize, pattern: &[(Option<u32>, u8)]) -> bool {
         if self.command_history.len() < start + pattern.len() {
             return false;
@@ -379,6 +417,9 @@ impl Mbc6 {
             })
     }
 
+    // Select a 128 KiB sector and fill it with FF. Protection and the
+    // write-enable latch gate only sector zero in this implementation; other
+    // sectors can be erased while that latch is clear.
     fn erase_sector_containing(&mut self, absolute: u32) {
         let sector = (absolute as usize / FLASH_SECTOR_LEN).min((FLASH_LEN / FLASH_SECTOR_LEN) - 1);
         if sector == 0 && (self.flash_sector0_protected || !self.flash_write_enabled) {
@@ -389,6 +430,8 @@ impl Mbc6 {
         self.flash_data[base..end].fill(0xFF);
     }
 
+    // Erase all flash unless sector zero is protected or write enable is
+    // clear; in either case preserve sector zero and erase the remaining sectors.
     fn erase_chip(&mut self) {
         if self.flash_sector0_protected || !self.flash_write_enabled {
             let sector1 = FLASH_SECTOR_LEN.min(self.flash_data.len());
@@ -398,11 +441,15 @@ impl Mbc6 {
         }
     }
 
+    // Permit programming outside sector zero regardless of write enable.
+    // Sector zero requires both write enable and its protection flag cleared.
     fn flash_can_program_absolute(&self, absolute: u32) -> bool {
         let sector = absolute as usize / FLASH_SECTOR_LEN;
         sector != 0 || (!self.flash_sector0_protected && self.flash_write_enabled)
     }
 
+    // End pending program modes and select an immediately ready status
+    // readout. ID/hidden flags are retained, so read-mode priority still applies.
     fn enter_flash_status(&mut self) {
         self.flash_program_mode = false;
         self.flash_program_hidden_mode = false;
@@ -410,6 +457,8 @@ impl Mbc6 {
         self.flash_status = self.flash_status_byte();
     }
 
+    // Report ready plus the sector-zero protection flag; there is no
+    // modeled busy interval or asynchronous programming-error status.
     fn flash_status_byte(&self) -> u8 {
         0x80 | if self.flash_sector0_protected {
             0x02
@@ -418,6 +467,8 @@ impl Mbc6 {
         }
     }
 
+    // Clear all read/program command modes and history while preserving
+    // flash bytes, protection state and bank/access registers.
     fn exit_flash_modes(&mut self) {
         self.flash_id_mode = false;
         self.flash_hidden_mode = false;
@@ -432,6 +483,8 @@ impl Mbc6 {
 mod tests {
     use super::*;
 
+    // Arrange enabled flash window A at a chosen bank before issuing one
+    // CPU-address write, allowing command addresses to cross selected banks.
     fn write_flash_a(mbc6: &mut Mbc6, bank: u8, addr: u16, value: u8) {
         mbc6.flash_enabled = true;
         mbc6.rom_bank_a_flash = true;
@@ -440,6 +493,7 @@ mod tests {
     }
 
     #[test]
+    // Check one selected flash bank byte through the ROM read interface.
     fn flash_bank_reads_selected_storage() {
         let mut mbc6 = Mbc6::default();
         mbc6.flash_enabled = true;
@@ -451,6 +505,8 @@ mod tests {
     }
 
     #[test]
+    // Send the identification sequence through banked window A, check its
+    // two ID bytes, and confirm F0 restores an erased flash read.
     fn id_mode_reports_jedec_and_exits() {
         let mut mbc6 = Mbc6::default();
 
@@ -467,6 +523,8 @@ mod tests {
     }
 
     #[test]
+    // Program one byte in writable sector zero and erase it using the
+    // sector command sequence. Other sectors and protection paths are not tested.
     fn program_and_sector_erase_work_for_flash() {
         let mut mbc6 = Mbc6::default();
         mbc6.flash_write_enabled = true;

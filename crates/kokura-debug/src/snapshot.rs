@@ -60,21 +60,28 @@ pub struct TimerSnapshot {
     pub tac: u8,
 }
 
+// Compute a wrapping multiply-then-XOR byte hash with the FNV offset
+// basis. Unlike state-file ROM checksums, this starts with a nonzero seed.
 pub fn hash_bytes(bytes: &[u8]) -> u32 {
     bytes.iter().fold(2166136261u32, |acc, &b| {
         acc.wrapping_mul(16777619) ^ b as u32
     })
 }
 
+// Hash the bytes exposed by the machine framebuffer accessor.
 pub fn compute_frame_hash(machine: &Machine) -> u32 {
     hash_bytes(machine.framebuffer())
 }
+// Hash only the currently selected 8 KiB VRAM bank, not both CGB banks.
 pub fn compute_vram_hash(machine: &Machine) -> u32 {
     hash_bytes(machine.memory.vram())
 }
+// Hash the complete 160-byte sprite-attribute region.
 pub fn compute_oam_hash(machine: &Machine) -> u32 {
     hash_bytes(machine.memory.oam())
 }
+// Hash selected-bank tile bytes plus SCX, SCY, BGP and LCDC.
+// This background-change hint excludes tile maps and is not a rendered image.
 pub fn compute_bg_hash(machine: &Machine) -> u32 {
     let v = machine.memory.vram();
     let mut data = Vec::with_capacity(0x1820);
@@ -87,6 +94,8 @@ pub fn compute_bg_hash(machine: &Machine) -> u32 {
     ]);
     hash_bytes(&data)
 }
+// Hash the selected window tile map and WX/WY/LCDC in the current VRAM
+// bank; tile graphics and palette data are not included in this hint.
 pub fn compute_window_hash(machine: &Machine) -> u32 {
     let v = machine.memory.vram();
     let base = if machine.ppu.window_map_base() == 0x1C00 {
@@ -100,6 +109,7 @@ pub fn compute_window_hash(machine: &Machine) -> u32 {
     data.extend_from_slice(&[machine.ppu.wx, machine.ppu.wy, machine.ppu.lcdc]);
     hash_bytes(&data)
 }
+// Hash OAM plus OBP0/OBP1/LCDC; sprite tile graphics are not included.
 pub fn compute_sprite_hash(machine: &Machine) -> u32 {
     let mut data = Vec::with_capacity(0xB0);
     data.extend_from_slice(machine.memory.oam());
@@ -108,6 +118,8 @@ pub fn compute_sprite_hash(machine: &Machine) -> u32 {
 }
 
 impl From<&Machine> for CpuSnapshot {
+    // Capture registers, reconstructed register pairs, clocks, bank selectors
+    // and interrupt state without advancing emulation.
     fn from(machine: &Machine) -> Self {
         Self {
             pc: machine.cpu.pc,
@@ -135,6 +147,9 @@ impl From<&Machine> for CpuSnapshot {
 }
 
 impl VideoSnapshot {
+    // Collect video registers, partial-data hashes and sprite estimates.
+    // A missing previous hash counts as changed; otherwise only frame-hash
+    // inequality sets screen_changed, rather than a full pixel comparison.
     pub fn from_machine(machine: &Machine, previous_hash: Option<u32>) -> Self {
         let frame_hash = compute_frame_hash(machine);
         let screen_changed = previous_hash.map(|prev| prev != frame_hash).unwrap_or(true);
@@ -168,6 +183,7 @@ impl VideoSnapshot {
 }
 
 impl From<&Machine> for TimerSnapshot {
+    // Copy raw divider/counter/modulo/control state without ticking the timer.
     fn from(machine: &Machine) -> Self {
         Self {
             div: machine.timer.div,

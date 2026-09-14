@@ -12,6 +12,7 @@ pub struct Mbc1 {
 }
 
 impl Default for Mbc1 {
+    // Select ROM bank one, high bits/RAM bank zero and mode zero, with RAM disabled.
     fn default() -> Self {
         Self {
             rom_bank_low5: 1,
@@ -24,6 +25,8 @@ impl Default for Mbc1 {
 }
 
 impl Mbc1 {
+    // Keep the lower ROM window at bank zero in mode zero; mode one
+    // uses the high two selector bits shifted into the bank number.
     fn lower_rom_bank(&self) -> usize {
         if self.mode == 0 {
             0
@@ -32,6 +35,8 @@ impl Mbc1 {
         }
     }
 
+    // Combine low-five and high-two ROM selector bits and map combined
+    // zero to one. Normal register writes also remap a zero low-five value.
     pub fn current_rom_bank(&self) -> u16 {
         let mut bank = (self.rom_bank_low5 & 0x1F) | ((self.bank_high2 & 0x03) << 5);
         if bank == 0 {
@@ -40,6 +45,7 @@ impl Mbc1 {
         bank as u16
     }
 
+    // Use RAM bank zero in mode zero and the stored two-bit bank in mode one.
     pub fn current_ram_bank(&self) -> u16 {
         if self.mode == 0 {
             0
@@ -48,6 +54,8 @@ impl Mbc1 {
         }
     }
 
+    // Map the two 16 KiB ROM windows through lower/upper selectors and
+    // shared storage-size wrapping; addresses outside ROM return FF.
     pub fn read_rom(&self, rom: &[u8], addr: u16) -> u8 {
         match addr {
             0x0000..=0x3FFF => read_rom_bank(rom, self.lower_rom_bank(), 0x4000, addr as usize),
@@ -59,6 +67,8 @@ impl Mbc1 {
         }
     }
 
+    // Gate RAM reads by the enable latch, then read a wrapped 8 KiB bank
+    // using the caller-supplied external-RAM address.
     pub fn read_ram(&self, ram: &[u8], addr: u16) -> u8 {
         if !self.ram_enabled {
             return 0xFF;
@@ -67,6 +77,8 @@ impl Mbc1 {
         read_ram_bank(ram, self.current_ram_bank() as usize, 0x2000, offset)
     }
 
+    // Ignore disabled RAM writes; otherwise update the wrapped selected
+    // 8 KiB RAM bank if the target byte exists.
     pub fn write_ram(&mut self, ram: &mut [u8], addr: u16, value: u8) {
         if !self.ram_enabled {
             return;
@@ -75,6 +87,8 @@ impl Mbc1 {
         write_ram_bank(ram, self.current_ram_bank() as usize, 0x2000, offset, value);
     }
 
+    // Decode RAM enable, low ROM bits, shared high-ROM/RAM bits and banking
+    // mode. A zero low-ROM write selects one, independent of high bits.
     pub fn write(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x1FFF => self.ram_enabled = (value & 0x0F) == 0x0A,

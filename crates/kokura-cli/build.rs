@@ -1,8 +1,10 @@
-//! CLIのホスト固有ビルド設定。
+//! Host-specific build configuration for the CLI.
 //!
-//! Windowsで大きなデバッグレポートや状態復元処理を実行するため、メイン
-//! スレッドのスタックサイズをリンカへ伝えます。
+//! On Windows, request a larger main-thread stack for large debug reports
+//! and state-restoration workflows.
 
+// On Windows, emit a linker argument requesting a 16 MiB main-thread
+// stack for large report/state workflows; other build hosts emit nothing.
 fn main() {
     #[cfg(target_os = "windows")]
     {

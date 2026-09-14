@@ -58,12 +58,15 @@ use crate::{
 const BANK_RETURN_GRACE_FRAMES: u64 = 120;
 
 #[derive(Debug, Clone, Copy)]
+// Track a suspected banked call until a matching return or the frame-based grace limit.
 struct PendingBankReturn {
     expected_bank: u16,
     started_frame: u64,
     reported: bool,
 }
 
+// Find the compiler thunk marker anywhere in a symbol name and parse the decimal
+// bank component up to its next underscore. Missing or invalid digits yield no target.
 fn kitaqgb_thunk_target_bank(name: &str) -> Option<u16> {
     let start = name.find("__kq_thunk_b")?;
     let suffix = name[start..].strip_prefix("__kq_thunk_b")?;
@@ -75,6 +78,8 @@ fn kitaqgb_thunk_target_bank(name: &str) -> Option<u16> {
 }
 
 #[derive(Debug)]
+// Own the machine plus debugger observations, controls and replay history.
+// A machine save state does not by itself represent all of these debugger fields.
 pub struct DebugSession {
     pub machine: Machine,
     pub last_frame_hash: Option<u32>,
@@ -84,6 +89,7 @@ pub struct DebugSession {
     pub previous_bg_hash: Option<u32>,
     pub previous_window_hash: Option<u32>,
     pub previous_sprite_hash: Option<u32>,
+    // Retain observations across ordinary run requests; current summary counters can have a shorter lifetime.
     pub event_log: Vec<DebugEvent>,
     pub diagnostics: Vec<Diagnostic>,
     pub vblank_count: u64,
@@ -210,6 +216,7 @@ pub struct DebugSession {
     halted_on_unsupported_opcode: bool,
     unsupported_opcodes: BTreeMap<u8, UnsupportedOpcodeSummary>,
     watch_windows: Vec<MemoryWatchSpec>,
+    // Keep separate initial, previous-frame and named byte snapshots for configured watches.
     watch_window_baselines: Vec<Vec<u8>>,
     watch_previous_frame_baselines: Vec<Vec<u8>>,
     watch_named_baselines: BTreeMap<String, Vec<Vec<u8>>>,
@@ -229,6 +236,7 @@ pub struct DebugSession {
     observed_frame_start: Option<u64>,
 }
 
+// Use stable lowercase interrupt-source labels for reports and stop matching.
 fn interrupt_source_name(source: InterruptSource) -> &'static str {
     match source {
         InterruptSource::Vblank => "vblank",
@@ -240,6 +248,7 @@ fn interrupt_source_name(source: InterruptSource) -> &'static str {
 }
 
 #[derive(Debug, Clone)]
+// Retain machine state and observation indices needed to relate a checkpoint to replay slices.
 struct ReplayCheckpoint {
     checkpoint_index: u64,
     generation: u32,
@@ -259,12 +268,14 @@ struct ReplayCheckpoint {
 }
 
 #[derive(Debug, Clone)]
+// Keep a frame digest with the generation that originally established it for later comparison.
 struct HistoricalReplayDigest {
     digest: u64,
     generation: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+// Separate frame completion from debugger stop and unsupported-opcode termination.
 pub struct DebugStepOutcome {
     pub frame_completed: bool,
     pub stop_triggered: bool,
@@ -272,6 +283,7 @@ pub struct DebugStepOutcome {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Expose a read-only instantaneous register/timing view with optional source metadata.
 pub struct ObservationSnapshot {
     pub completed_frames: u64,
     pub active_frame: u64,
@@ -294,6 +306,8 @@ pub struct ObservationSnapshot {
 }
 
 impl DebugSession {
+    // Take ownership of the supplied machine without resetting it. Initialize debugger
+    // history and counters, recording its current bank, PC and clocks as the observation origin.
     pub fn new(machine: Machine) -> Self {
         let last_iflag = machine.interrupt.iflag;
         let initial_bank = machine.current_rom_bank();
@@ -457,14 +471,18 @@ impl DebugSession {
         }
     }
 
+    // Run the frame loop with no host callback; debugger stops can end the request early.
     pub fn run_frames(&mut self, frames: u64) -> Result<(), kokura_core::error::CoreError> {
         self.run_frames_with_callback(frames, |_, _| {})
     }
 
+    // Delegate one observed execution step without starting a new frame-run statistics window.
     pub fn debug_step(&mut self) -> Result<DebugStepOutcome, kokura_core::error::CoreError> {
         self.run_debug_step()
     }
 
+    // Sample live registers, PPU state and available symbol/source metadata without advancing execution.
+    // Completed frames are absolute machine clocks; active_frame is the next one-based frame label.
     pub fn observation_snapshot(&self) -> ObservationSnapshot {
         let completed_frames = self.machine.clocks.frames;
         ObservationSnapshot {
@@ -489,14 +507,18 @@ impl DebugSession {
         }
     }
 
+    // Compute current watch results using the selected baseline without mutating the session.
     pub fn watched_memory_results_snapshot(&self) -> Vec<MemoryWatchResult> {
         self.watched_memory_results()
     }
 
+    // Borrow the owned emulation machine for read-only host inspection.
     pub fn machine(&self) -> &Machine {
         &self.machine
     }
 
+    // Delegate a cooperative byte exchange and record each machine's returned I/O and IRQ traces.
+    // The boolean reports transfer completion, not an independently clocked cable simulation.
     pub fn exchange_serial_with_peer(&mut self, peer: &mut Self) -> bool {
         let result = self.machine.exchange_serial_with_peer(&mut peer.machine);
         self.capture_io_trace(&result.self_io_trace);
@@ -509,6 +531,7 @@ impl DebugSession {
     /// Completes one byte driven by an attached external-clock serial device.
     /// Returns the byte the emulated Game Boy transmitted when a transfer was
     /// armed, or `None` when SC was not in external-clock transfer mode.
+    // Record traces returned by the core external-clock byte exchange; this call does not step either CPU.
     pub fn clock_external_serial_byte(&mut self, incoming: u8) -> Option<u8> {
         let result = self.machine.clock_external_serial_byte(incoming);
         self.capture_io_trace(&result.io_trace);
@@ -516,6 +539,8 @@ impl DebugSession {
         result.completed.then_some(result.outgoing)
     }
 
+    // Drain all queued stereo frames after each frame-loop iteration and append interleaved PCM.
+    // Existing queued audio is included; a debugger stop can invoke the callback before a full frame completes.
     pub fn run_frames_collect_audio(
         &mut self,
         frames: u64,
@@ -533,6 +558,9 @@ impl DebugSession {
         })
     }
 
+    // Start a run statistics window, execute up to the requested frame-loop iterations,
+    // invoke the host callback and record replay checkpoints, then derive diagnostics.
+    // The reset list is selective: event history and several mapper/APU/CGB totals persist across calls.
     pub fn run_frames_with_callback<F>(
         &mut self,
         frames: u64,
@@ -642,10 +670,12 @@ impl DebugSession {
         self.last_ppu_mode = self.machine.ppu.current_mode();
         self.last_stat_coincidence = self.machine.ppu.stat_coincidence();
         self.observed_frame_start = None;
+        // A new run request refreshes watch baselines even when the same session is reused for another stage.
         self.refresh_watch_window_baselines();
         self.refresh_stop_watchpoint_baselines();
         for frame_idx in 0..frames {
             self.run_single_frame()?;
+            // This is a one-based loop-iteration label; run_single_frame may have stopped partway through a frame.
             after_frame(self, frame_idx + 1);
             self.maybe_record_replay_checkpoint();
             if self.last_stop_reason.is_some() {
@@ -658,6 +688,7 @@ impl DebugSession {
             }
         }
         self.finalize_bank_return_tracking();
+        // Build a new diagnostic list from the final state and current counters rather than retaining the old list.
         self.diagnostics = analyze_basic(
             &self.machine,
             DiagnosticInput {
@@ -744,10 +775,13 @@ impl DebugSession {
         Ok(())
     }
 
+    // Report a recorded debugger stop or unsupported opcode; CPU HALT by itself is not a debugger stop.
     pub fn is_execution_stopped(&self) -> bool {
         self.halted_on_unsupported_opcode || self.last_stop_reason.is_some()
     }
 
+    // Capture rendering and memory hash baselines once per absolute frame number.
+    // Repeated instruction steps in the same frame reuse those baselines.
     fn prepare_frame_tracking_if_needed(&mut self) {
         let current_frame = self.machine.clocks.frames;
         if self.observed_frame_start == Some(current_frame) {
@@ -766,6 +800,8 @@ impl DebugSession {
         self.observed_frame_start = Some(current_frame);
     }
 
+    // Compare completed-frame hashes, accumulate change flags and advance rendering/watch
+    // baselines. Enabled-layer flags qualify layer changes; hashes alone do not identify pixel-level causes.
     fn finish_observed_frame(&mut self) {
         let current_watch_baselines = self
             .watch_windows
@@ -820,6 +856,9 @@ impl DebugSession {
         self.observed_frame_start = Some(self.machine.clocks.frames);
     }
 
+    // Check execution breakpoints before stepping, collect the returned device traces,
+    // infer bank/thunk activity, then check memory/MMIO/IRQ/DMA stops in priority order.
+    // Unsupported opcodes become a successful outcome with a halt flag; other core errors propagate.
     pub fn run_debug_step(&mut self) -> Result<DebugStepOutcome, kokura_core::error::CoreError> {
         self.prepare_frame_tracking_if_needed();
         let frame_before = self.machine.clocks.frames;
@@ -855,6 +894,7 @@ impl DebugSession {
             }
             Err(err) => return Err(err),
         };
+        // Successful idle and interrupt-service steps also contribute to this sample count and pre-step PC timing.
         self.executed_instruction_samples = self.executed_instruction_samples.saturating_add(1);
         self.record_pc_cycles(code_bank_before, pc_before, step.cycles);
         self.capture_ppu_trace(&step.ppu_trace);
@@ -890,6 +930,7 @@ impl DebugSession {
                 to_symbol: to_symbol.clone(),
             });
 
+            // Use compiler symbol naming to distinguish thunk entry/return from arbitrary bank changes.
             let thunk_target = from_symbol
                 .as_deref()
                 .and_then(kitaqgb_thunk_target_bank)
@@ -936,6 +977,7 @@ impl DebugSession {
             self.end_rom_bank = current_bank;
         }
 
+        // Short-circuit stop detection: a watchpoint takes precedence over MMIO, IRQ and DMA matches in this step.
         let stop_reason = self
             .check_watchpoints_after_step()
             .or_else(|| self.check_mmio_stops_after_step(&mmio_before))
@@ -958,6 +1000,8 @@ impl DebugSession {
         })
     }
 
+    // Step until the machine frame counter changes or a stop outcome occurs.
+    // If no frame hash exists yet, sample the current partial frame before returning.
     fn run_single_frame(&mut self) -> Result<(), kokura_core::error::CoreError> {
         let start_frame = self.machine.clocks.frames;
         self.prepare_frame_tracking_if_needed();
@@ -977,6 +1021,9 @@ impl DebugSession {
         Ok(())
     }
 
+    // Translate ordered core PPU events into debugger history and update PPU counters.
+    // Frame/cycle labels are sampled from the machine at capture time, rather than reconstructed
+    // for each earlier event within the completed core step.
     fn capture_ppu_trace(&mut self, trace: &[PpuTraceEvent]) {
         for event in trace {
             match *event {
@@ -1040,6 +1087,7 @@ impl DebugSession {
                         ly,
                     });
                 }
+                // Ignore the core serial label and hash the current framebuffer at capture time.
                 PpuTraceEvent::FrameComplete { frame_serial: _ } => {
                     let hash = compute_frame_hash(&self.machine);
                     self.event_log.push(DebugEvent::FrameComplete {
@@ -1061,6 +1109,8 @@ impl DebugSession {
         }
     }
 
+    // Accumulate DMA activity and estimated stalls while preserving each event payload.
+    // The shared HDMA block/completion counters include general-purpose DMA events as well.
     fn capture_dma_trace(&mut self, trace: &[DmaTraceEvent]) {
         for event in trace {
             match *event {
@@ -1117,6 +1167,7 @@ impl DebugSession {
                     hblank_mode,
                     stall_cycles,
                 } => {
+                    // Count both HDMA and GDMA blocks here; only HBlank-mode stalls enter the HDMA stall total.
                     self.hdma_block_count += 1;
                     if hblank_mode {
                         self.hdma_stall_cycles_estimate += u64::from(stall_cycles);
@@ -1195,6 +1246,8 @@ impl DebugSession {
         }
     }
 
+    // Infer LCD enable, writable STAT-bit and LYC changes by comparing values around a step.
+    // Writes that leave these values unchanged are invisible to this comparison.
     fn capture_ppu_register_writes(&mut self, lcdc_before: u8, stat_before: u8, lyc_before: u8) {
         let lcdc_after = self.machine.ppu.lcdc;
         let stat_after = self.machine.ppu.read_stat();
@@ -1228,6 +1281,8 @@ impl DebugSession {
         }
     }
 
+    // Count and report mapper control writes and ROM/RAM bank changes with their original
+    // addresses and values; attach the current capture-time clock to each event.
     fn capture_mapper_trace(&mut self, trace: &[MapperTraceEvent]) {
         for event in trace {
             match *event {
@@ -1289,6 +1344,9 @@ impl DebugSession {
         }
     }
 
+    // Translate APU observations, decoding numeric reason tags and accumulating activity,
+    // PCM production/drop totals and peak queue occupancy. Reported pop risk is an observation
+    // from the core, not a measurement of audible output.
     fn capture_apu_trace(&mut self, trace: &[ApuTraceEvent]) {
         for event in trace {
             match *event {
@@ -1439,6 +1497,7 @@ impl DebugSession {
                         active_mask,
                     });
                 }
+                // Add produced frames from this event and retain the largest reported queue occupancy.
                 ApuTraceEvent::PcmFramesBuffered {
                     frames,
                     buffered_frames,
@@ -1453,6 +1512,7 @@ impl DebugSession {
                         buffered_frames,
                     });
                 }
+                // Accumulate the dropped-frame delta; preserve the core lifetime total only in the event payload.
                 ApuTraceEvent::PcmBufferWrapped {
                     dropped_frames,
                     dropped_total,
@@ -1516,6 +1576,8 @@ impl DebugSession {
         }
     }
 
+    // Record CGB mode, bank, palette and speed events. Palette write totals include blocked
+    // attempts, with a separate blocked counter; speed-freeze cycles are accumulated from trace payloads.
     fn capture_cgb_trace(&mut self, trace: &[CgbTraceEvent]) {
         for event in trace {
             match *event {
@@ -1652,6 +1714,8 @@ impl DebugSession {
         }
     }
 
+    // Record timer, serial and joypad events with current capture-time clocks.
+    // Serial transfer count tracks starts, while button/direction read counters follow the active-low selection bits.
     fn capture_io_trace(&mut self, trace: &[IoTraceEvent]) {
         for event in trace {
             match *event {
@@ -1730,6 +1794,7 @@ impl DebugSession {
                         p1,
                     });
                 }
+                // A read with both groups selected contributes to both group-specific counters.
                 IoTraceEvent::Joypad(JoypadTraceEvent::Read { p1, select, mask }) => {
                     self.joypad_read_count += 1;
                     if select & 0x20 == 0 {
@@ -1766,7 +1831,10 @@ impl DebugSession {
         }
     }
 
+    // Count newly raised TIMER/SERIAL/JOYPAD bits from sampled IF changes, then retain
+    // explicit request/service/blocked traces. IF-edge counts are not equivalent to counting every request event.
     fn capture_interrupt_edges(&mut self, trace: &[InterruptTraceEvent]) {
+        // Repeated requests while an IF bit remains set do not create another sampled rising edge.
         let raised = self.machine.interrupt.iflag & !self.last_iflag;
         if raised & INT_TIMER != 0 {
             self.timer_interrupt_count += 1;
@@ -1821,6 +1889,8 @@ impl DebugSession {
         self.last_iflag = self.machine.interrupt.iflag;
     }
 
+    // When the symbol or source label changes, classify the current symbol as a possible
+    // intrinsic and append execution context. This tracks context transitions rather than confirmed CALL instructions.
     fn capture_symbol_event(&mut self) {
         let current_symbol = self.current_pc_symbol();
         let current_source = self.current_source_label();
@@ -1848,6 +1918,8 @@ impl DebugSession {
         }
     }
 
+    // Update name-classified intrinsic counters and append a descriptive event.
+    // A recognized helper name suggests a role; it does not prove the helper completed its effect.
     fn capture_intrinsic(&mut self, intrinsic: KitaqgbIntrinsicMatch) {
         let symbol = intrinsic.canonical_name.clone();
         let kind = intrinsic.kind.clone();
@@ -1870,6 +1942,7 @@ impl DebugSession {
             }
             KitaqgbIntrinsicKind::Present => {
                 self.present_count += 1;
+                // This flag records any earlier recognized wait in the run, not necessarily the immediately preceding helper.
                 if self.seen_wait_vblank {
                     self.wait_before_present = true;
                 }
@@ -1891,6 +1964,7 @@ impl DebugSession {
         });
     }
 
+    // Map fixed-window PCs to bank zero, then try exact or nearest preceding symbol metadata.
     fn symbol_name_at(&self, selected_bank: u16, pc: u16) -> Option<String> {
         let bank = Self::code_bank_for_pc(pc, selected_bank);
         self.symbol_table.as_ref().and_then(|table| {
@@ -1901,6 +1975,8 @@ impl DebugSession {
         })
     }
 
+    // Latch unsupported-opcode termination and aggregate by opcode byte, keeping the
+    // latest bank/PC/symbol plus a source-labelled event for this occurrence.
     fn record_unsupported_opcode(&mut self, opcode: u8, pc: u16) {
         let rom_bank = Self::code_bank_for_pc(pc, self.machine.current_rom_bank());
         let symbol = self.symbol_name_at(rom_bank, pc);
@@ -1939,6 +2015,8 @@ impl DebugSession {
         });
     }
 
+    // Track consecutive reversals between the last two banks, exempting recognized compiler
+    // thunk transitions. Emit one suspicion when a streak first reaches four reversals.
     fn update_bank_thrash(
         &mut self,
         previous_bank: u16,
@@ -1974,15 +2052,19 @@ impl DebugSession {
         self.previous_bank_switch = Some((previous_bank, current_bank));
     }
 
+    // At run completion, flag the first suspected bank return older than the 120-frame
+    // grace period. A still-active short call is not marked missing merely because the window ended.
     fn finalize_bank_return_tracking(&mut self) {
         self.end_rom_bank = self.machine.current_rom_bank();
         let current_frame = self.machine.clocks.frames;
+        // Strictly more than 120 elapsed frames is stale; only the first stale entry is considered per call.
         let unresolved_index = self.pending_bank_returns.iter().position(|pending| {
             current_frame.saturating_sub(pending.started_frame) > BANK_RETURN_GRACE_FRAMES
         });
         self.bank_restored = unresolved_index.is_none();
         if let Some(index) = unresolved_index {
             let pending = &mut self.pending_bank_returns[index];
+            // An already-reported first stale entry prevents later stale entries from being emitted on this call.
             if pending.reported {
                 return;
             }
@@ -1997,6 +2079,8 @@ impl DebugSession {
         }
     }
 
+    // Maintain the latest 64 bank/PC samples and a run histogram; repetition score is the
+    // maximum frequency of one location within that sliding window, not necessarily consecutive execution.
     fn record_pc(&mut self, bank: u16, pc: u16) {
         if self.recent_pcs.len() == 64 {
             self.recent_pcs.pop_front();
@@ -2011,10 +2095,12 @@ impl DebugSession {
         self.max_repeated_pc_hits = self.max_repeated_pc_hits.max(repeated);
     }
 
+    // Attribute the returned step cycle count to its pre-step bank/PC for the run profiler.
     fn record_pc_cycles(&mut self, bank: u16, pc: u16, cycles: u32) {
         *self.pc_cycle_histogram.entry((bank, pc)).or_insert(0) += u64::from(cycles);
     }
 
+    // Install symbol metadata, refresh the current labels and append a context sample for this load.
     pub fn set_symbol_table(&mut self, symbol_table: SymbolTable) {
         self.symbol_table = Some(symbol_table);
         self.last_symbol_name = self.current_pc_symbol();
@@ -2026,16 +2112,19 @@ impl DebugSession {
         );
     }
 
+    // Replace stored build metadata; runtime execution and ROM identity are not validated here.
     pub fn set_toolchain_build_report(&mut self, report: ToolchainBuildReport) {
         self.toolchain_build_report = Some(report);
     }
 
+    // Remove symbol metadata and cached labels while retaining older context/history entries.
     pub fn clear_symbol_table(&mut self) {
         self.symbol_table = None;
         self.last_symbol_name = None;
         self.last_source_label = None;
     }
 
+    // Look up a named variable address in metadata; this returns no bank or type information.
     pub fn named_variable_addr(&self, name: &str) -> Option<u16> {
         self.symbol_table
             .as_ref()?
@@ -2043,11 +2132,14 @@ impl DebugSession {
             .map(|variable| variable.address)
     }
 
+    // Read one byte through the core peek path at the metadata address under current bank selection.
     pub fn read_named_variable_u8(&self, name: &str) -> Option<u8> {
         let addr = self.named_variable_addr(name)?;
         Some(self.machine.peek8(addr))
     }
 
+    // Use the Link4 mode and peer variables to select a non-host session.
+    // Missing variables, inactive mode or a peer beyond either available slot bound return no selection.
     pub fn link4_selected_peer_session(&self, session_count: usize) -> Option<usize> {
         let mode = self.read_named_variable_u8("Link4_ModeState")?;
         if mode != 1 {
@@ -2065,12 +2157,15 @@ impl DebugSession {
         Some(selected_peer)
     }
 
+    // Replace watched ranges and refresh memory and stop-watch baselines.
+    // Callers must validate the supplied specifications before this setter.
     pub fn set_watch_windows(&mut self, watch_windows: Vec<MemoryWatchSpec>) {
         self.watch_windows = watch_windows;
         self.refresh_watch_window_baselines();
         self.refresh_stop_watchpoint_baselines();
     }
 
+    // Remove ranges and every stored watch baseline/name; the selected baseline-mode enum is retained.
     pub fn clear_watch_windows(&mut self) {
         self.watch_windows.clear();
         self.watch_window_baselines.clear();
@@ -2079,10 +2174,13 @@ impl DebugSession {
         self.watch_named_baseline_active = None;
     }
 
+    // Borrow the configured observation ranges without reading emulated memory.
     pub fn watch_windows(&self) -> &[MemoryWatchSpec] {
         &self.watch_windows
     }
 
+    // Require a previously captured nonempty name for Named mode, then store the mode
+    // and trimmed optional label. Initial/PreviousFrame modes do not require that label to exist.
     pub fn set_watch_baseline_mode(
         &mut self,
         mode: MemoryWatchBaselineMode,
@@ -2109,14 +2207,17 @@ impl DebugSession {
         Ok(())
     }
 
+    // Return the selected watch comparison mode.
     pub fn watch_baseline_mode(&self) -> MemoryWatchBaselineMode {
         self.watch_baseline_mode
     }
 
+    // Borrow the stored optional label; its presence alone does not imply Named mode is selected.
     pub fn active_watch_baseline_name(&self) -> Option<&str> {
         self.watch_named_baseline_active.as_deref()
     }
 
+    // Capture current bytes for all watch ranges under a trimmed nonempty name, replacing an existing capture.
     pub fn capture_watch_baseline(&mut self, name: &str) -> Result<(), String> {
         let trimmed = name.trim();
         if trimmed.is_empty() {
@@ -2132,10 +2233,12 @@ impl DebugSession {
         Ok(())
     }
 
+    // Return captured baseline names in the map's sorted order.
     pub fn watch_baseline_names(&self) -> Vec<String> {
         self.watch_named_baselines.keys().cloned().collect()
     }
 
+    // Validate before replacing stop controls, clear the previous debugger stop and refresh watchpoint baselines.
     pub fn set_stop_conditions(&mut self, stop_conditions: StopConditionSet) -> Result<(), String> {
         let validated = stop_conditions.validate()?;
         self.stop_conditions = validated;
@@ -2145,6 +2248,7 @@ impl DebugSession {
         Ok(())
     }
 
+    // Remove all configured stops and the recorded debugger stop, leaving unsupported-opcode state unchanged.
     pub fn clear_stop_conditions(&mut self) {
         self.stop_conditions = StopConditionSet::default();
         self.stop_watchpoint_baselines.clear();
@@ -2152,10 +2256,13 @@ impl DebugSession {
         self.stopped_by_debugger = false;
     }
 
+    // Borrow the validated stop configuration.
     pub fn stop_conditions(&self) -> &StopConditionSet {
         &self.stop_conditions
     }
 
+    // Validate and replace replay controls, resetting last-checkpoint suppression and transient
+    // rewind/divergence reports. Existing retained checkpoints and historical digests are not cleared here.
     pub fn set_replay_control(&mut self, replay_control: ReplayControlSet) -> Result<(), String> {
         self.replay_control = replay_control.validate()?;
         self.replay_last_checkpoint_key = None;
@@ -2164,21 +2271,27 @@ impl DebugSession {
         Ok(())
     }
 
+    // Borrow the current replay settings.
     pub fn replay_control(&self) -> &ReplayControlSet {
         &self.replay_control
     }
 
+    // Return the frame of the front retained checkpoint, or none when no checkpoint exists.
     pub fn oldest_replay_checkpoint_frame(&self) -> Option<u64> {
         self.replay_checkpoints
             .front()
             .map(|checkpoint| checkpoint.frame)
     }
 
+    // Restore the newest retained checkpoint at or before the requested target, which may
+    // rewind farther than requested. Refresh observation baselines and append a new generation event;
+    // existing event history, counters and stop flags are retained rather than rewound.
     pub fn rewind_frames(&mut self, frames_back: u64) -> bool {
         if !self.replay_control.enabled || frames_back == 0 || self.replay_checkpoints.is_empty() {
             return false;
         }
         let from_frame = self.machine.clocks.frames;
+        // A zero-distance request is rejected above, and an unavailable older checkpoint leaves the session unchanged.
         let target_frame = from_frame.saturating_sub(frames_back);
         let checkpoint = self
             .replay_checkpoints
@@ -2189,6 +2302,7 @@ impl DebugSession {
         let Some(checkpoint) = checkpoint else {
             return false;
         };
+        // Apply the saved machine fields directly; this path does not call the session load_state reset routine.
         checkpoint.state.apply_to(&mut self.machine);
         let now_frame_hash = compute_frame_hash(&self.machine);
         self.previous_frame_hash = Some(now_frame_hash);
@@ -2225,14 +2339,18 @@ impl DebugSession {
         true
     }
 
+    // Borrow the recorded debugger stop reason, if any.
     pub fn stop_reason(&self) -> Option<&StopReason> {
         self.last_stop_reason.as_ref()
     }
 
+    // Expose the debugger's unsupported-opcode latch rather than the CPU HALT flag.
     pub fn halted_on_unsupported_opcode(&self) -> bool {
         self.halted_on_unsupported_opcode
     }
 
+    // Label addresses below 0x4000 as bank zero and every higher address with the selected bank.
+    // This is the debugger metadata convention, not a general physical-address mapping.
     fn code_bank_for_pc(pc: u16, selected_bank: u16) -> u16 {
         if pc < 0x4000 {
             0
@@ -2241,20 +2359,25 @@ impl DebugSession {
         }
     }
 
+    // Apply the metadata bank convention to the current PC.
     fn current_code_bank(&self) -> u16 {
         Self::code_bank_for_pc(self.machine.cpu.pc, self.machine.current_rom_bank())
     }
 
+    // Look up symbol metadata covering the current PC in its labelled code bank.
     fn current_pc_symbol_info(&self) -> Option<&SymbolInfo> {
         self.symbol_table
             .as_ref()
             .and_then(|table| table.lookup(self.current_code_bank(), self.machine.cpu.pc))
     }
 
+    // Copy the current symbol name when a lookup succeeds.
     fn current_pc_symbol(&self) -> Option<String> {
         self.current_pc_symbol_info().map(|s| s.name.clone())
     }
 
+    // Search older recorded PC samples for a resolvable symbol, skipping the latest sample.
+    // The result need not be the immediately preceding instruction's symbol.
     fn previous_pc_symbol(&self) -> Option<String> {
         self.symbol_table.as_ref().and_then(|table| {
             self.recent_pcs
@@ -2265,6 +2388,7 @@ impl DebugSession {
         })
     }
 
+    // Find the nearest preceding symbol in the current labelled bank.
     fn nearest_symbol_name(&self) -> Option<String> {
         let bank = self.current_code_bank();
         self.symbol_table
@@ -2273,6 +2397,7 @@ impl DebugSession {
             .map(|s| s.name.clone())
     }
 
+    // Find the next symbol by address; this is not a prediction of control flow.
     fn next_symbol_name(&self) -> Option<String> {
         let bank = self.current_code_bank();
         self.symbol_table
@@ -2281,6 +2406,7 @@ impl DebugSession {
             .map(|s| s.name.clone())
     }
 
+    // Resolve a bank/PC to source metadata and convert it to the stop-context model.
     fn source_location_at(&self, selected_bank: u16, pc: u16) -> Option<SourceLocationStop> {
         let bank = Self::code_bank_for_pc(pc, selected_bank);
         self.symbol_table
@@ -2289,6 +2415,7 @@ impl DebugSession {
             .map(Self::source_location_stop_from_info)
     }
 
+    // Copy source coordinates and optional symbol/section metadata into a stop-context record.
     fn source_location_stop_from_info(info: &SourceLocationInfo) -> SourceLocationStop {
         SourceLocationStop {
             path: info.path.clone(),
@@ -2301,6 +2428,7 @@ impl DebugSession {
         }
     }
 
+    // Copy source coordinates into the serializable report model without resolving the source file.
     fn source_location_report_from_stop(source: &SourceLocationStop) -> SourceLocationReport {
         SourceLocationReport {
             path: source.path.clone(),
@@ -2313,10 +2441,12 @@ impl DebugSession {
         }
     }
 
+    // Resolve source metadata for the current PC.
     fn current_source_location(&self) -> Option<SourceLocationStop> {
         self.source_location_at(self.current_code_bank(), self.machine.cpu.pc)
     }
 
+    // Search older PC samples for source metadata, skipping the latest recorded sample.
     fn previous_source_location(&self) -> Option<SourceLocationStop> {
         self.recent_pcs
             .iter()
@@ -2325,6 +2455,7 @@ impl DebugSession {
             .find_map(|&(bank, pc)| self.source_location_at(bank, pc))
     }
 
+    // Find the next source mapping by address in the labelled bank, independent of execution flow.
     fn next_source_location(&self) -> Option<SourceLocationStop> {
         let bank = self.current_code_bank();
         self.symbol_table
@@ -2333,6 +2464,7 @@ impl DebugSession {
             .map(Self::source_location_stop_from_info)
     }
 
+    // Format the available source path, line and optional column as a display label.
     fn current_source_label(&self) -> Option<String> {
         self.current_source_location().map(|s| match s.column {
             Some(col) => format!("{}:{}:{}", s.path, s.line, col),
@@ -2340,6 +2472,7 @@ impl DebugSession {
         })
     }
 
+    // Prefer section metadata from the source mapping, then the function, then the current symbol.
     fn current_section(&self) -> Option<String> {
         self.current_source_location()
             .and_then(|source| source.section)
@@ -2353,6 +2486,7 @@ impl DebugSession {
             })
     }
 
+    // Resolve the current PC against function metadata in its labelled code bank.
     fn current_function_info(&self) -> Option<&FunctionInfo> {
         let bank = self.current_code_bank();
         self.symbol_table
@@ -2360,6 +2494,7 @@ impl DebugSession {
             .and_then(|table| table.lookup_function(bank, self.machine.cpu.pc))
     }
 
+    // Retrieve compiler estimates associated with the current PC; these are not runtime measurements.
     fn current_static_estimate_info(&self) -> Option<&StaticEstimateInfo> {
         let bank = self.current_code_bank();
         self.symbol_table
@@ -2367,6 +2502,7 @@ impl DebugSession {
             .and_then(|table| table.lookup_static_estimate(bank, self.machine.cpu.pc))
     }
 
+    // Resolve function metadata for an explicit PC using the debugger bank convention.
     fn function_info_at(&self, selected_bank: u16, pc: u16) -> Option<&FunctionInfo> {
         let bank = Self::code_bank_for_pc(pc, selected_bank);
         self.symbol_table
@@ -2374,6 +2510,7 @@ impl DebugSession {
             .and_then(|table| table.lookup_function(bank, pc))
     }
 
+    // Resolve static compiler estimates for an explicit bank/PC.
     fn static_estimate_at(&self, selected_bank: u16, pc: u16) -> Option<&StaticEstimateInfo> {
         let bank = Self::code_bank_for_pc(pc, selected_bank);
         self.symbol_table
@@ -2381,6 +2518,7 @@ impl DebugSession {
             .and_then(|table| table.lookup_static_estimate(bank, pc))
     }
 
+    // Take the first build-reported hotspot with an exact matching name, without qualifying it by bank.
     fn build_hotspot_score_for_function(&self, name: &str) -> Option<u32> {
         self.toolchain_build_report
             .as_ref()
@@ -2388,6 +2526,7 @@ impl DebugSession {
             .map(|row| row.score)
     }
 
+    // Copy compiler function bounds, layout and calling-convention fields into the report schema.
     fn toolchain_function_report(info: &FunctionInfo) -> ToolchainFunctionReport {
         ToolchainFunctionReport {
             name: info.name.clone(),
@@ -2405,6 +2544,7 @@ impl DebugSession {
         }
     }
 
+    // Copy compiler size/call estimates and ABI flags into the report without recomputation.
     fn toolchain_static_estimate_report(
         info: &StaticEstimateInfo,
     ) -> ToolchainStaticEstimateReport {
@@ -2423,6 +2563,7 @@ impl DebugSession {
         }
     }
 
+    // Append a register/source context sample, retaining at most the latest sixteen entries.
     fn push_execution_context(&mut self, reason: impl Into<String>, bank: u16, pc: u16) {
         if self.execution_context_trail.len() == 16 {
             self.execution_context_trail.pop_front();
@@ -2431,10 +2572,13 @@ impl DebugSession {
             .push_back(self.execution_context_frame(reason.into(), bank, pc));
     }
 
+    // Copy retained context samples in chronological insertion order.
     fn execution_context_trail(&self) -> Vec<ExecutionContextFrame> {
         self.execution_context_trail.iter().cloned().collect()
     }
 
+    // Combine the supplied PC/bank label with current live registers and six bytes at SP.
+    // The stack preview is observed data, not an inferred parameter list.
     fn execution_context_frame(&self, reason: String, bank: u16, pc: u16) -> ExecutionContextFrame {
         let cpu = &self.machine.cpu;
         ExecutionContextFrame {
@@ -2456,6 +2600,7 @@ impl DebugSession {
         }
     }
 
+    // Export checkpoint metadata and hashes while leaving the saved machine state and internal indices private.
     fn replay_checkpoint_report(&self, checkpoint: &ReplayCheckpoint) -> ReplayCheckpointReport {
         ReplayCheckpointReport {
             checkpoint_index: checkpoint.checkpoint_index,
@@ -2476,6 +2621,9 @@ impl DebugSession {
         }
     }
 
+    // Mix slice endpoints, counters, generation and selected symbol/source text into a
+    // non-cryptographic summary. This hashes aggregate metadata, not every executed instruction
+    // or the complete ordered event payloads; metadata changes can alter the digest.
     fn replay_slice_digest(slice: &ReplaySliceReport) -> u64 {
         let mut acc = 0xcbf29ce484222325u64;
         for value in [
@@ -2520,6 +2668,9 @@ impl DebugSession {
         acc
     }
 
+    // Walk retained checkpoints in insertion order, deriving event counts and saturated
+    // clock/sample deltas from successive endpoints. The first interval starts at the run origin
+    // and event index zero; history is not filtered by replay generation or current run here.
     fn build_replay_slices(&self) -> Vec<ReplaySliceReport> {
         let mut slices = Vec::new();
         let mut previous_checkpoint_index = None;
@@ -2537,6 +2688,7 @@ impl DebugSession {
 
         for checkpoint in &self.replay_checkpoints {
             let event_end = checkpoint.event_log_len.min(self.event_log.len());
+            // The end is clamped, but the start assumes retained checkpoint event indices are monotonic and still valid.
             let events = &self.event_log[previous_event_log_len..event_end];
             let mut bank_switch_count = 0u64;
             let mut far_call_count = 0u64;
@@ -2595,6 +2747,7 @@ impl DebugSession {
                 }
             }
 
+            // Counts summarize selected event categories; they do not preserve event order within the interval.
             let mut slice = ReplaySliceReport {
                 from_checkpoint_index: previous_checkpoint_index,
                 to_checkpoint_index: checkpoint.checkpoint_index,
@@ -2632,6 +2785,7 @@ impl DebugSession {
             slices.push(slice);
 
             previous_checkpoint_index = Some(checkpoint.checkpoint_index);
+            // Retain the original checkpoint index, so later slicing relies on its consistency with current history.
             previous_event_log_len = checkpoint.event_log_len;
             previous_instruction_samples_total = checkpoint.instruction_samples_total;
             start_frame = checkpoint.frame;
@@ -2648,6 +2802,9 @@ impl DebugSession {
         slices
     }
 
+    // Group sampled PCs and returned step cycles by metadata function and bank, then
+    // combine them with bank transitions from retained events. These sources can span different
+    // windows when a session is reused; rankings are activity summaries rather than bus accounting.
     fn build_profiler(&self) -> Option<ProfilerReport> {
         #[derive(Default)]
         struct FunctionAcc {
@@ -2689,6 +2846,7 @@ impl DebugSession {
                 .copied()
                 .unwrap_or(0);
             let function_info = self.function_info_at(bank, pc);
+            // Prefer declared function ranges; fallback nearest-symbol grouping is a heuristic for unattributed PCs.
             let function_name = function_info
                 .map(|info| info.name.clone())
                 .or_else(|| self.symbol_name_at(bank, pc))
@@ -2701,6 +2859,7 @@ impl DebugSession {
             entry.samples += samples;
             entry.cycles += cycles;
             entry.unique_pcs.insert(pc);
+            // Strict comparison retains the first address encountered when multiple PCs have equal sample counts.
             if samples > entry.hottest_samples {
                 entry.hottest_samples = samples;
                 entry.hottest_pc = pc;
@@ -2782,6 +2941,7 @@ impl DebugSession {
                 cycles: item.cycles,
                 unique_pcs: item.unique_pcs.len() as u32,
                 hottest_pc: item.hottest_pc,
+                // This legacy field repeats the hottest PC; it does not record the last chronological visit.
                 last_pc: item.hottest_pc,
                 source: item.source,
                 static_estimate: item.static_estimate,
@@ -2795,6 +2955,7 @@ impl DebugSession {
                 .then_with(|| a.bank.cmp(&b.bank))
                 .then_with(|| a.name.cmp(&b.name))
         });
+        // Expose only the sixteen highest-ranked functions; totals for omitted functions are not included in this list.
         function_activity.truncate(16);
 
         let mut bank_activity: Vec<_> = bank_acc
@@ -2843,6 +3004,7 @@ impl DebugSession {
                 .then_with(|| a.from_bank.cmp(&b.from_bank))
                 .then_with(|| a.to_bank.cmp(&b.to_bank))
         });
+        // Transitions rank suspected far calls first, then observed switch count, and retain at most sixteen entries.
         bank_transitions.truncate(16);
 
         let generated = !function_activity.is_empty()
@@ -2861,6 +3023,8 @@ impl DebugSession {
         })
     }
 
+    // Aggregate selected retained events into coarse address ranges and attach the top
+    // profiler functions/banks. Those activity leaders are not proven causes of the bucket events.
     fn build_heatmap(&self, profiler: Option<&ProfilerReport>) -> Option<HeatmapReport> {
         #[derive(Default)]
         struct BucketAcc {
@@ -2868,6 +3032,7 @@ impl DebugSession {
             detail: String,
         }
 
+        // Increment one region/range bucket and retain the latest descriptive detail for that bucket.
         fn record_bucket(
             map: &mut BTreeMap<(String, u16, u16), BucketAcc>,
             region: &str,
@@ -2880,6 +3045,7 @@ impl DebugSession {
             entry.detail = detail;
         }
 
+        // Record one event in an exact-address I/O bucket.
         fn record_mmio(
             map: &mut BTreeMap<(String, u16, u16), BucketAcc>,
             addr: u16,
@@ -2888,12 +3054,14 @@ impl DebugSession {
             record_bucket(map, "io", addr, addr, detail);
         }
 
+        // Group a mapper-control address into an inclusive 8 KiB window.
         fn mapper_window(addr: u16) -> (u16, u16) {
             let start = addr & 0xE000;
             let end = start.saturating_add(0x1FFF);
             (start, end)
         }
 
+        // Group an address into an inclusive 256-byte page for coarse DMA source/destination reporting.
         fn page_window(addr: u16) -> (u16, u16) {
             let start = addr & 0xFF00;
             let end = start.saturating_add(0x00FF);
@@ -3048,6 +3216,7 @@ impl DebugSession {
             }
         }
 
+        // One event can contribute to multiple regions, so region totals are not a unique-event count.
         let mut region_totals: BTreeMap<String, u64> = BTreeMap::new();
         for ((region, _, _), item) in &buckets {
             *region_totals.entry(region.clone()).or_insert(0) += item.count;
@@ -3069,6 +3238,7 @@ impl DebugSession {
                 .then_with(|| a.region.cmp(&b.region))
                 .then_with(|| a.start.cmp(&b.start))
         });
+        // Region totals were computed before truncation and can exceed the visible top-24 bucket sum.
         bucket_reports.truncate(24);
 
         let mut region_total_reports: Vec<_> = region_totals
@@ -3078,6 +3248,7 @@ impl DebugSession {
         region_total_reports
             .sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.region.cmp(&b.region)));
 
+        // Copy existing profiler leaders without correlating their PCs to specific MMIO/DMA events.
         let culprit_functions = profiler
             .map(|report| {
                 report
@@ -3124,6 +3295,8 @@ impl DebugSession {
         })
     }
 
+    // Classify a CPU address by the static memory map. This labels a region without
+    // checking current mapper selection, device access restrictions or stack validity.
     fn classify_stack_region(addr: u16) -> &'static str {
         match addr {
             0x0000..=0x7FFF => "rom",
@@ -3139,6 +3312,7 @@ impl DebugSession {
         }
     }
 
+    // Copy current general-purpose registers, HL, SP and PC for ABI inspection; flags are omitted from this model.
     fn build_abi_register_snapshot(&self) -> AbiRegisterSnapshotReport {
         let cpu = &self.machine.cpu;
         AbiRegisterSnapshotReport {
@@ -3155,6 +3329,9 @@ impl DebugSession {
         }
     }
 
+    // Preview twelve bytes at the live SP, interpreting the first word as a possible
+    // return address. Metadata supplies expected parameter sizes; stack-call arguments are
+    // previewed from SP+2 with an eight-byte cap, without reconstructing a function prologue.
     fn build_abi_stack_window(
         &self,
         current_function_contract: Option<&ToolchainFunctionReport>,
@@ -3162,6 +3339,7 @@ impl DebugSession {
         let sp = self.machine.cpu.sp;
         let preview_len = 12u16;
         let preview_bytes = self.read_watch_window(sp, preview_len);
+        // Sum all declared parameter sizes, including metadata for functions that may use register arguments.
         let expected_stack_argument_bytes = current_function_contract
             .map(|function| {
                 function
@@ -3182,6 +3360,7 @@ impl DebugSession {
         let decoded_return_region = decoded_return_address
             .map(Self::classify_stack_region)
             .map(str::to_string);
+        // This assumes an entry-style stack layout; the live SP may already reflect local allocations or pushes.
         let argument_base = current_function_contract
             .and_then(|function| function.is_stack_call.then(|| sp.saturating_add(2)));
         let argument_preview_cap = 8u16;
@@ -3214,6 +3393,9 @@ impl DebugSession {
         }
     }
 
+    // Select the latest context associated with the current function, falling back
+    // to live state, and search the trail for another function as a possible caller.
+    // These context samples are not proven CALL/entry snapshots.
     fn recent_abi_boundary_context(
         &self,
         current_function: &ToolchainFunctionReport,
@@ -3234,6 +3416,7 @@ impl DebugSession {
             ));
         }
 
+        // Search the entire trail rather than restricting candidates to entries before the chosen callee sample.
         let caller_context = callee_entry.as_ref().and_then(|entry| {
             self.execution_context_trail.iter().rev().find_map(|frame| {
                 if frame.pc == entry.pc && frame.rom_bank == entry.rom_bank {
@@ -3250,6 +3433,7 @@ impl DebugSession {
         (caller_context, callee_entry)
     }
 
+    // Package a register role, evidence label and explanation; this helper does not validate the rule.
     fn abi_contract_rule(
         register: &str,
         role: &str,
@@ -3264,6 +3448,7 @@ impl DebugSession {
         }
     }
 
+    // Read supported uppercase register names from a retained context; unknown names have no value.
     fn execution_context_register_value(
         frame: &ExecutionContextFrame,
         register: &str,
@@ -3278,6 +3463,8 @@ impl DebugSession {
         }
     }
 
+    // Choose a descriptive contract class from the inferred helper kind.
+    // The returned label is not a measured confidence score or a verified implementation guarantee.
     fn intrinsic_contract_strength(intrinsic_kind: &KitaqgbIntrinsicKind) -> &'static str {
         match intrinsic_kind {
             KitaqgbIntrinsicKind::Bank => "preserve_return_carriers",
@@ -3304,6 +3491,8 @@ impl DebugSession {
         }
     }
 
+    // Derive argument-carrier and stack-layout expectations from function metadata,
+    // and add BC/DE scratch rules for inferred or declared cross-bank wrappers.
     fn build_call_boundary_contract_rules(
         &self,
         current_function: &ToolchainFunctionReport,
@@ -3353,6 +3542,8 @@ impl DebugSession {
         rules
     }
 
+    // Describe stack restoration, expected return carriers and cross-bank wrapper roles.
+    // The 2+ byte return-size branch records HL only; it is not a complete wider-value ABI model.
     fn build_return_boundary_contract_rules(
         &self,
         callee_function: &ToolchainFunctionReport,
@@ -3410,6 +3601,9 @@ impl DebugSession {
         rules
     }
 
+    // Assign helper-class expectations: bank helpers preserve A/HL, memory/video helpers
+    // allow inferred scratch registers, and other helpers remain observational. Every class
+    // receives a generic caller-visible stack-restoration expectation.
     fn build_intrinsic_contract_rules(
         &self,
         intrinsic_kind: &KitaqgbIntrinsicKind,
@@ -3540,6 +3734,9 @@ impl DebugSession {
         rules
     }
 
+    // Combine candidate caller/callee contexts with the first matching toolchain edge,
+    // then compare supported entry carriers and describe stack/scratch observations.
+    // Equality or drift between sparse contexts does not prove argument transport at the call instruction.
     fn build_abi_call_boundary(
         &self,
         current_function: &ToolchainFunctionReport,
@@ -3560,6 +3757,7 @@ impl DebugSession {
             })
         });
 
+        // A metadata edge can supply cross-bank classification even when the exact caller sample is unavailable.
         let cross_bank = cross_bank_edge.is_some_and(|edge| edge.caller_bank != edge.callee_bank)
             || caller_function
                 .as_ref()
@@ -3731,6 +3929,9 @@ impl DebugSession {
         )
     }
 
+    // Find a candidate caller-resume sample, an earlier different-function context,
+    // and an earlier matching caller context. The search uses function identity and trail order,
+    // not decoded CALL/RET instructions or a maintained call stack.
     fn recent_abi_return_context(
         &self,
         current_function: &ToolchainFunctionReport,
@@ -3797,6 +3998,9 @@ impl DebugSession {
         )
     }
 
+    // Compare candidate caller/callee samples for stack and return-carrier changes,
+    // adding metadata and a function-end distance heuristic. Register checks may be produced
+    // even when the selected callee sample is not near a return instruction.
     fn build_abi_return_boundary(
         &self,
         current_function: &ToolchainFunctionReport,
@@ -3829,6 +4033,7 @@ impl DebugSession {
             cross_bank_edge,
             cross_bank,
         );
+        // Distance is measured to metadata end, without decoding RET; saturating subtraction also maps PCs beyond end to zero.
         let bytes_to_callee_end = callee_last_context
             .as_ref()
             .map(|frame| callee_function.end.saturating_sub(u32::from(frame.pc)));
@@ -3848,6 +4053,7 @@ impl DebugSession {
             let sp_stable = caller_pre.sp == caller_resume.sp;
             register_checks.push(AbiReturnRegisterCheckReport {
                 register: "SP".to_string(),
+                // For the SP check this field stores the caller pre-call value, despite the shared field name.
                 callee_value: Some(caller_pre.sp),
                 caller_resume_value: Some(caller_resume.sp),
                 expectation:
@@ -3876,6 +4082,7 @@ impl DebugSession {
         if let (Some(callee_last), Some(caller_resume)) =
             (&callee_last_context, &caller_resume_context)
         {
+            // Carrier selection follows wrapper/return/fastcall metadata and is independent of the near-end flag.
             let should_check_a = cross_bank_edge
                 .is_some_and(|edge| edge.via_thunk || edge.via_farcall)
                 || cross_bank
@@ -4067,7 +4274,11 @@ impl DebugSession {
         })
     }
 
+    // Inspect recent symbol-classified helpers, pair them with surrounding non-helper
+    // contexts and report rule-based register changes. Return at most four distinct helper
+    // bank/PC/name sites in chronological order; repeated calls to one site are deduplicated.
     fn build_abi_intrinsic_boundaries(&self) -> Vec<AbiIntrinsicBoundaryReport> {
+        // Classify the stored symbol name as a helper; no instruction or implementation analysis occurs here.
         fn intrinsic_from_frame(frame: &ExecutionContextFrame) -> Option<KitaqgbIntrinsicMatch> {
             frame.symbol.as_deref().and_then(classify_symbol_name)
         }
@@ -4078,6 +4289,7 @@ impl DebugSession {
             self.current_code_bank(),
             self.machine.cpu.pc,
         );
+        // Only bank/PC determine whether to append live state; changed registers at the same PC do not trigger a new sample.
         let needs_current_state = frames.last().is_none_or(|last| {
             last.rom_bank != current_state.rom_bank || last.pc != current_state.pc
         });
@@ -4101,6 +4313,7 @@ impl DebugSession {
                 continue;
             }
 
+            // Skip all intervening helper-classified contexts; nested or adjacent helper activity can share these outer samples.
             let before_context = (0..index).rev().find_map(|candidate| {
                 intrinsic_from_frame(&frames[candidate])
                     .is_none()
@@ -4176,6 +4389,7 @@ impl DebugSession {
                         )
                     },
                 });
+                // SP is checked explicitly above; only preserved, scratch and observational register roles are processed here.
                 for rule in &contract_rules {
                     let Some(before_value) =
                         Self::execution_context_register_value(before, &rule.register)
@@ -4321,6 +4535,7 @@ impl DebugSession {
                 observed_changed_registers,
                 notes,
             });
+            // Keep the four most recent distinct sites, then reverse the list for display order.
             if reports.len() == 4 {
                 break;
             }
@@ -4330,6 +4545,9 @@ impl DebugSession {
         reports
     }
 
+    // Combine build-reported issues, current stack/register context and heuristic
+    // boundary observations into a triage report. Runtime alerts include informational ABI
+    // notes as well as suspicious changes, so the status is not a pass/fail contract proof.
     fn build_abi_verification(&self) -> Option<AbiVerificationReport> {
         let abi_mode = self
             .toolchain_build_report
@@ -4340,6 +4558,7 @@ impl DebugSession {
             .as_ref()
             .map(|report| report.abi_issues.clone())
             .unwrap_or_default();
+        // Prefer the actual issue-list length when populated; otherwise preserve the build report's summary count.
         let toolchain_issue_count = self
             .toolchain_build_report
             .as_ref()
@@ -4464,6 +4683,7 @@ impl DebugSession {
             }
         }
         if let Some(boundary) = &return_boundary {
+            // Escalation of return-carrier drift uses the metadata-distance heuristic, not a verified RET boundary.
             if boundary.callee_near_ret {
                 for check in &boundary.register_checks {
                     if check.status == "changed_across_return" {
@@ -4486,6 +4706,7 @@ impl DebugSession {
             }
         }
 
+        // clean_candidate means no collected issues or alerts; it does not establish complete ABI coverage.
         let status = if toolchain_issue_count == 0 && runtime_alerts.is_empty() {
             "clean_candidate"
         } else if toolchain_issue_count > 0 {
@@ -4521,6 +4742,9 @@ impl DebugSession {
         })
     }
 
+    // Rank selected retained MMIO/mapper events, repeated-PC samples and unsupported
+    // opcode observations for triage. Counters are heuristic activity summaries, and the
+    // event history can cover a wider interval than the current run's PC/opcode histograms.
     fn build_rom_forensics(
         &self,
         auto_diagnosis: Option<&AutoDiagnosisReport>,
@@ -4542,6 +4766,8 @@ impl DebugSession {
             detail: String,
         }
 
+        // Count a category and retain its first title plus the most recently visited event
+        // coordinates/detail. After rewind, the last inserted event need not have the largest frame number.
         fn record_hotspot(
             map: &mut BTreeMap<String, HotspotAcc>,
             key: &str,
@@ -4561,6 +4787,7 @@ impl DebugSession {
         }
 
         let mut mmio_hotspots: BTreeMap<String, HotspotAcc> = BTreeMap::new();
+        // Some categories include every observed write/toggle, even ordinary activity; suspicious is a triage label.
         let mut suspicious_writes: BTreeMap<String, HotspotAcc> = BTreeMap::new();
         let mut mapper_activity: BTreeMap<String, MapperAcc> = BTreeMap::new();
 
@@ -4876,6 +5103,7 @@ impl DebugSession {
             }
         }
 
+        // Four visits to one PC qualify a candidate; this does not establish a back edge or a stalled loop.
         let mut hot_loop_candidates: Vec<_> = self
             .pc_hit_histogram
             .iter()
@@ -4911,6 +5139,7 @@ impl DebugSession {
             })
             .collect();
         mmio_hotspots.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.key.cmp(&b.key)));
+        // Publish the eight highest-count categories after a deterministic key tie-break.
         mmio_hotspots.truncate(8);
 
         let mut suspicious_writes: Vec<_> = suspicious_writes
@@ -4960,6 +5189,7 @@ impl DebugSession {
             .sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.opcode.cmp(&b.opcode)));
         unsupported_hotspots.truncate(8);
 
+        // Copy the existing diagnosis ranking and confidence labels without independently validating their causes.
         let triage = auto_diagnosis
             .map(|report| {
                 report
@@ -5017,6 +5247,8 @@ impl DebugSession {
         })
     }
 
+    // Format only the five most recently inserted events, then restore their insertion
+    // order for display. These compact labels omit some payload fields and are not a complete trace.
     fn recent_event_summary(&self) -> Vec<String> {
         self.event_log
             .iter()
@@ -5380,6 +5612,8 @@ impl DebugSession {
             .collect()
     }
 
+    // Describe accumulated layer-change flags, stop state and selected run counters.
+    // The text reflects existing observations; no additional execution or pixel comparison occurs here.
     fn delta_summary(&self) -> Vec<String> {
         let mut out = Vec::new();
         if let Some(stop_reason) = &self.last_stop_reason {
@@ -5408,6 +5642,7 @@ impl DebugSession {
         if self.wait_before_present {
             out.push("WaitVBlank observed before Present".to_string());
         }
+        // This flag means no tracked return exceeded the grace period; it does not prove every call returned.
         if self.bank_restored {
             out.push("No unresolved far-call return observed".to_string());
         } else {
@@ -5422,6 +5657,8 @@ impl DebugSession {
         out
     }
 
+    // Suggest follow-up input/watch experiments from counters and visual-change flags.
+    // These generic suggestions do not infer a ROM-specific control scheme or execute any input.
     fn input_hints(&self) -> Vec<String> {
         let mut out = Vec::new();
         if self.halted_on_unsupported_opcode {
@@ -5456,6 +5693,7 @@ impl DebugSession {
         if self.hdma_deferred_count > 0 {
             out.push("HBlank HDMA deferred while CPU was halted; add snapshots on hdma_deferred and compare with HALT/interrupt wake-up edges.".to_string());
         }
+        // The IRQ count comes from sampled IF rising edges, so absence here is not proof that no request occurred.
         if self.serial_transfer_count > 0 && self.serial_interrupt_count == 0 {
             out.push("Serial transfer started but no serial IRQ arrived; add snapshots on serial and irq_blocked, or extend the NONE stage.".to_string());
         }
@@ -5491,6 +5729,7 @@ impl DebugSession {
         out
     }
 
+    // Replace initial and previous-frame captures with current watched bytes; named captures remain unchanged.
     fn refresh_watch_window_baselines(&mut self) {
         let baselines: Vec<Vec<u8>> = self
             .watch_windows
@@ -5501,6 +5740,7 @@ impl DebugSession {
         self.watch_previous_frame_baselines = baselines;
     }
 
+    // Select stored baselines by mode. Missing Named state yields no baseline rather than an error here.
     fn active_watch_window_baselines(&self) -> Option<&[Vec<u8>]> {
         match self.watch_baseline_mode {
             MemoryWatchBaselineMode::Initial => Some(&self.watch_window_baselines),
@@ -5513,6 +5753,7 @@ impl DebugSession {
         }
     }
 
+    // Capture current bytes for each stop watchpoint in configuration order.
     fn refresh_stop_watchpoint_baselines(&mut self) {
         self.stop_watchpoint_baselines = self
             .stop_conditions
@@ -5522,6 +5763,7 @@ impl DebugSession {
             .collect();
     }
 
+    // Sample configured MMIO addresses through the core peek path for before/after comparison.
     fn read_mmio_stop_values(&self) -> Vec<u8> {
         self.stop_conditions
             .mmio_writes
@@ -5530,6 +5772,8 @@ impl DebugSession {
             .collect()
     }
 
+    // Attach current clocks, registers, symbols and retained context to a stop reason.
+    // The bank field uses the selected ROM bank, which can differ from the symbol lookup bank for fixed-window PCs.
     fn current_stop_reason_context(&self, kind: &str, label: String, detail: String) -> StopReason {
         StopReason {
             kind: kind.to_string(),
@@ -5545,6 +5789,7 @@ impl DebugSession {
         }
     }
 
+    // Append a stop event and replace the latest stop reason while latching debugger-stop state.
     fn record_stop_reason(&mut self, reason: StopReason) {
         self.event_log.push(DebugEvent::ExecutionStop {
             frame: reason.frame,
@@ -5564,6 +5809,8 @@ impl DebugSession {
         self.stopped_by_debugger = true;
     }
 
+    // Hash watched bytes in configuration order, mixing addresses and sizes into one
+    // non-cryptographic digest. Watch names are exported but not hashed; no watches leave the nonzero seed digest.
     fn current_replay_watch_hashes(&self) -> (u64, Vec<ReplayWatchDigestReport>) {
         let mut digest = 0xcbf29ce484222325u64;
         let mut reports = Vec::with_capacity(self.watch_windows.len());
@@ -5583,6 +5830,8 @@ impl DebugSession {
         (digest, reports)
     }
 
+    // Mix selected video/watch hashes, clocks, CPU registers and IF/IE into a compact
+    // comparison digest. This omits other machine state, so equality is not full-state equivalence.
     fn compute_replay_digest(&self, frame_hash: u32, watch_digest: u64) -> u64 {
         let cpu = &self.machine.cpu;
         let values = [
@@ -5613,6 +5862,9 @@ impl DebugSession {
             })
     }
 
+    // At configured absolute-frame intervals or a debugger stop, capture machine state
+    // and hashes unless the same frame/cycle was just captured. Bound the checkpoint deque,
+    // compare against the first historical digest for that frame and optionally stop on divergence.
     fn maybe_record_replay_checkpoint(&mut self) {
         if !self.replay_control.enabled {
             return;
@@ -5620,6 +5872,7 @@ impl DebugSession {
         let interval = self.replay_control.checkpoint_interval_frames.max(1);
         let current_frame = self.machine.clocks.frames;
         let current_cycle = self.machine.clocks.cycles;
+        // Intervals are aligned to absolute machine frames; stops allow capture between normal interval boundaries.
         let should_capture = self.last_stop_reason.is_some() || current_frame % interval == 0;
         if !should_capture {
             return;
@@ -5648,11 +5901,13 @@ impl DebugSession {
             source: self.current_source_location(),
             watch_hashes,
             watch_digest,
+            // The saved cursor excludes the checkpoint/divergence/stop events appended later in this helper.
             event_log_len: self.event_log.len(),
             instruction_samples_total: self.executed_instruction_samples,
             state: self.machine.save_state(),
         };
         self.replay_checkpoints.push_back(checkpoint.clone());
+        // Evict only saved checkpoints here; historical per-frame digests and event history are retained.
         while self.replay_checkpoints.len() > self.replay_control.max_checkpoints {
             self.replay_checkpoints.pop_front();
         }
@@ -5663,6 +5918,7 @@ impl DebugSession {
             .get(&current_frame)
             .map(|previous| (previous.generation, previous.digest))
         {
+            // Compare only across generations at the same frame label, even if captures occurred at different cycles.
             if previous_generation != self.replay_generation && previous_digest != digest {
                 self.replay_divergence_count = self.replay_divergence_count.saturating_add(1);
                 let divergence = ReplayDivergenceReport {
@@ -5696,6 +5952,7 @@ impl DebugSession {
                 }
             }
         } else {
+            // Establish the first digest for this frame; subsequent captures do not replace it.
             self.replay_frame_digests.insert(
                 current_frame,
                 HistoricalReplayDigest {
@@ -5716,6 +5973,7 @@ impl DebugSession {
         });
     }
 
+    // Return the first configured execution breakpoint matching the supplied bank/PC/symbol.
     fn check_execute_breakpoints_before_step(
         &self,
         pc: u16,
@@ -5738,6 +5996,7 @@ impl DebugSession {
             })
     }
 
+    // Match validated canonical source names, using an omitted name or any as a wildcard.
     fn interrupt_source_matches(expected: Option<&str>, actual: InterruptSource) -> bool {
         match expected.unwrap_or("any") {
             "any" => true,
@@ -5750,7 +6009,10 @@ impl DebugSession {
         }
     }
 
+    // Compare current bytes to per-watch baselines and return the first changed range.
+    // This observes value changes, not read/write bus transactions or writes that restore the same value.
     fn check_watchpoints_after_step(&mut self) -> Option<StopReason> {
+        // A match returns early, so later watchpoint baselines are not refreshed until a later call.
         let specs = self.stop_conditions.watchpoints.clone();
         for (idx, spec) in specs.iter().enumerate() {
             let current = self.read_watch_window(spec.addr, spec.size);
@@ -5784,6 +6046,8 @@ impl DebugSession {
         None
     }
 
+    // Return the first MMIO register whose sampled value changed during the step.
+    // This is not a write trace: same-value writes are invisible and autonomous device changes can also match.
     fn check_mmio_stops_after_step(&self, before_values: &[u8]) -> Option<StopReason> {
         for (idx, spec) in self.stop_conditions.mmio_writes.iter().enumerate() {
             let before = before_values
@@ -5805,6 +6069,8 @@ impl DebugSession {
         None
     }
 
+    // Search configured IRQ stops in priority order, then each trace in order,
+    // matching phase and source; blocked events match source bits in the pending mask.
     fn check_interrupt_stops_after_step(
         &self,
         trace: &[InterruptTraceEvent],
@@ -5879,6 +6145,8 @@ impl DebugSession {
         None
     }
 
+    // Return the first configured DMA event match. HDMA-named variants also match
+    // general-purpose transfers represented by the same core event type; the mode flag is not tested here.
     fn check_dma_stops_after_step(&self, trace: &[DmaTraceEvent]) -> Option<StopReason> {
         for spec in &self.stop_conditions.dma_events {
             for event in trace {
@@ -5906,12 +6174,16 @@ impl DebugSession {
         None
     }
 
+    // Peek a byte range without CPU execution, wrapping addresses at 16 bits.
+    // Public watch validation normally rejects overflow; internal stack previews can wrap.
     fn read_watch_window(&self, addr: u16, size: u16) -> Vec<u8> {
         (0..size)
             .map(|offset| self.machine.peek8(addr.wrapping_add(offset)))
             .collect()
     }
 
+    // Describe up to sixteen bytes as hex and printable ASCII, add scalar interpretations
+    // for one-to-four-byte windows, and list at most eight changed offsets across the full range.
     fn build_watch_insights(bytes: &[u8], baseline: Option<&[u8]>) -> Vec<MemoryWatchInsight> {
         let preview = &bytes[..bytes.len().min(16)];
         let mut insights = Vec::new();
@@ -5988,6 +6260,8 @@ impl DebugSession {
         insights
     }
 
+    // Compare each watch to its positional baseline and compute full-range hashes/counts
+    // with capped byte/diff previews. Missing baseline bytes are treated as unchanged current bytes.
     fn watched_memory_results(&self) -> Vec<MemoryWatchResult> {
         const WATCH_PREVIEW_LIMIT: usize = 16;
         const WATCH_DIFF_PREVIEW_LIMIT: usize = 16;
@@ -5999,6 +6273,7 @@ impl DebugSession {
             .enumerate()
             .map(|(idx, spec)| {
                 let bytes = self.read_watch_window(spec.addr, spec.size);
+                // Baseline identity is positional, not keyed by watch name/address; callers must keep captures aligned with the ranges.
                 let baseline = active_baselines.and_then(|saved| saved.get(idx));
                 let nonzero_bytes = bytes.iter().filter(|&&byte| byte != 0).count() as u32;
                 let mut changed_bytes = 0u32;
@@ -6056,10 +6331,14 @@ impl DebugSession {
             .collect()
     }
 
+    // Save machine state only; debugger history, watch controls and replay bookkeeping are not serialized.
     pub fn save_state(&self) -> MachineState {
         self.machine.save_state()
     }
 
+    // Restore caller-validated machine state, clear replay and selected run tracking,
+    // and refresh watch baselines. Event history, diagnostics, named watches and some
+    // mapper/APU/CGB totals remain; this is not a reset of the entire debugger session.
     pub fn load_state(&mut self, state: &MachineState) {
         self.machine.load_state(state);
         self.replay_checkpoints.clear();
@@ -6068,8 +6347,10 @@ impl DebugSession {
         self.replay_last_checkpoint_key = None;
         self.replay_last_rewind = None;
         self.replay_divergence = None;
+        // Keep the pre-load frame hash as the previous value; the current hash is computed from restored state.
         self.previous_frame_hash = self.last_frame_hash;
         self.last_frame_hash = Some(compute_frame_hash(&self.machine));
+        // This reset list does not refresh previous_vram_hash, although other layer hashes are refreshed.
         self.previous_oam_hash = Some(compute_oam_hash(&self.machine));
         self.previous_bg_hash = Some(compute_bg_hash(&self.machine));
         self.previous_window_hash = Some(compute_window_hash(&self.machine));
@@ -6166,6 +6447,7 @@ impl DebugSession {
         self.last_ly = self.machine.ppu.ly;
         self.last_ppu_mode = self.machine.ppu.current_mode();
         self.last_stat_coincidence = self.machine.ppu.stat_coincidence();
+        // Mark this frame as already initialized; the next same-frame step reuses the baselines above.
         self.observed_frame_start = Some(self.machine.clocks.frames);
         self.scanline_event_count = 0;
         self.stat_signal_count = 0;
@@ -6173,10 +6455,13 @@ impl DebugSession {
         self.refresh_stop_watchpoint_baselines();
     }
 
+    // Unpack four two-bit shade selectors from the DMG palette register in color-index order.
     fn decode_dmg_palette(value: u8) -> Vec<u8> {
         (0..4).map(|shift| (value >> (shift * 2)) & 0x03).collect()
     }
 
+    // Scan the bank's tile-data area in 16-byte units, count nonzero tiles and retain
+    // hashes/counts for the first eight by index. This does not decode tile pixels or visibility.
     fn build_tile_preview(&self, bank: u8) -> (u16, Vec<VisualizationTilePreviewReport>) {
         let vram = self.machine.memory.vram_bank(bank);
         let tile_region = &vram[..0x1800.min(vram.len())];
@@ -6199,6 +6484,9 @@ impl DebugSession {
         (nonzero_tiles, preview)
     }
 
+    // Build a current-state JSON view of banks, layers, palettes, tile/OAM summaries
+    // and audio/DMA counters. Samples are capped and visibility is estimated; no image
+    // renderer or host audio playback is exercised by generating this report.
     fn build_visualizations(&self) -> Option<VisualizationsReport> {
         let (bank0_nonzero_tiles, bank0_preview) = self.build_tile_preview(0);
         let (bank1_nonzero_tiles, bank1_preview) = self.build_tile_preview(1);
@@ -6218,6 +6506,7 @@ impl DebugSession {
                 }
             }
         }
+        // Expose all eight stored palettes even in DMG mode; presence here does not establish that CGB rendering is active.
         let cgb_bg = (0..8)
             .map(|palette| VisualizationPalettePreviewReport {
                 palette_index: palette,
@@ -6337,6 +6626,9 @@ impl DebugSession {
         })
     }
 
+    // Assemble live stability counters without inventing release-validation results.
+    // This report does not inspect distribution files or execute build/test commands.
+    // Legacy boolean fields stay false until verified; notes distinguish unknown from absent.
     fn build_release_readiness(
         &self,
         timing_packs_present: bool,
@@ -6344,20 +6636,21 @@ impl DebugSession {
         visualizations_present: bool,
         auto_diagnosis_present: bool,
     ) -> Option<ReleaseReadinessReport> {
+        // No packaging checks run here. False means not confirmed, not that a file is missing.
         let packaging = ReleasePackagingSurfaceReport {
-            license_present: true,
-            readme_present: true,
-            c_header_present: true,
-            python_bridge_present: true,
-            samples_present: true,
-            docs_present: true,
-            manifest_present: true,
+            license_present: false,
+            readme_present: false,
+            c_header_present: false,
+            python_bridge_present: false,
+            samples_present: false,
+            docs_present: false,
+            manifest_present: false,
         };
         let smoke = ReleaseSmokeSurfaceReport {
             static_checks_only: true,
-            json_schema_validated: true,
-            python_bridge_py_compile_validated: true,
-            c_header_export_surface_checked: true,
+            json_schema_validated: false,
+            python_bridge_py_compile_validated: false,
+            c_header_export_surface_checked: false,
             rust_build_validated: false,
             workspace_tests_validated: false,
             regression_validated: false,
@@ -6374,9 +6667,10 @@ impl DebugSession {
             timing_pack_surface_available: timing_packs_present,
             visualization_surface_available: visualizations_present,
         };
+        // Report the validation boundary without claiming that the host lacks Rust tools.
         let mut blockers = vec![
-            "Rust toolchain validation is still pending: cargo/rustc were unavailable in this environment, so build/test/release status is not proven here.".to_string(),
-            "Workspace-wide regression and smoke runs have not been executed against a real built binary yet.".to_string(),
+            "This report does not execute build, test or packaging checks; consult the release validation records.".to_string(),
+            "Packaging and smoke flags are not confirmed by this report; false does not establish failure or absence.".to_string(),
         ];
         if self.unsupported_opcode_count > 0 {
             blockers.push(format!(
@@ -6397,12 +6691,7 @@ impl DebugSession {
         if self.replay_divergence_count > 0 {
             warnings.push(format!("Replay divergence was observed (count={}); deterministic playback should be checked on a real build.", self.replay_divergence_count));
         }
-        let readiness_level = if blockers.is_empty() {
-            "candidate"
-        } else {
-            "build_blocked"
-        }
-        .to_string();
+        let readiness_level = "not_evaluated".to_string();
         Some(ReleaseReadinessReport {
             generated: true,
             readiness_level,
@@ -6419,12 +6708,15 @@ impl DebugSession {
             smoke,
             stability,
             carry_forward_notes: vec![
-                "release_readiness is a truthful static readiness surface, not proof that release validation has already passed.".to_string(),
-                "A real release candidate still requires Rust-enabled build/test/regression execution outside this environment.".to_string(),
+                "release_readiness combines observed stability counters with unevaluated release checks; it is not a release certificate.".to_string(),
+                "Build and regression results must identify the exact source and executable being released.".to_string(),
             ],
         })
     }
 
+    // Assemble a read-only report from live state, retained history, cached diagnostics
+    // and derived analysis. Counters retain their own reset semantics; report generation
+    // does not run emulation, refresh basic diagnostics or perform release checks.
     pub fn report(&self) -> DebugReport {
         let pc_offset = self
             .current_pc_symbol_info()
@@ -6452,6 +6744,7 @@ impl DebugSession {
                 .previous_source_location()
                 .as_ref()
                 .map(Self::source_location_report_from_stop),
+            // This field repeats the current source lookup rather than performing a separate nearest-source search.
             nearest_source: self
                 .current_source_location()
                 .as_ref()
@@ -6478,6 +6771,7 @@ impl DebugSession {
                 || r.current_static_estimate.is_some()
                 || !r.execution_context_trail.is_empty()
         });
+        // Copy existing counters verbatim; no per-run subtraction or reconciliation with retained event history occurs here.
         let summary = EventSummary {
             vblank_count: self.vblank_count,
             timer_interrupt_count: self.timer_interrupt_count,
@@ -6613,6 +6907,7 @@ impl DebugSession {
             vblank_events: self.vblank_count,
             screen_changed: self.screen_changed,
             repeated_pc_hits: self.max_repeated_pc_hits,
+            // Timing analysis receives the absolute machine frame counter, unlike the frame delta used at run finalization.
             executed_frames: self.machine.clocks.frames,
             timer_interrupts: self.timer_interrupt_count,
             timer_overflows: self.timer_overflow_count,
@@ -6713,6 +7008,7 @@ impl DebugSession {
         DebugReport {
             schema_version: DEBUG_REPORT_SCHEMA_VERSION,
             meta: ReportMeta {
+                // This report field is the absolute frame counter, not the number of frames requested in the latest run.
                 frames_executed: self.machine.clocks.frames,
                 events_recorded: self.event_log.len(),
                 diagnostics_recorded: self.diagnostics.len(),
@@ -6754,6 +7050,34 @@ impl DebugSession {
 }
 
 #[cfg(test)]
+mod release_validation_tests {
+    use super::*;
+
+    #[test]
+    // Reporting observations must not certify checks that were never executed.
+    fn release_report_does_not_invent_validation() {
+        let mut session = DebugSession::new(Machine::new());
+        session.unsupported_opcode_count = 3;
+        let report = session
+            .build_release_readiness(true, false, true, false)
+            .unwrap();
+        assert_eq!(report.readiness_level, "not_evaluated");
+        assert_eq!(report.stability.unsupported_opcode_count, 3);
+        assert!(report.stability.timing_pack_surface_available);
+        assert!(!report.stability.rom_forensics_available);
+        let json = serde_json::to_value(&report).unwrap();
+        for value in json["packaging"].as_object().unwrap().values() {
+            assert_eq!(value.as_bool(), Some(false));
+        }
+        for (key, value) in json["smoke"].as_object().unwrap() {
+            assert_eq!(value.as_bool(), Some(key == "static_checks_only"));
+        }
+        assert!(report.blockers.iter().any(|text| text.contains("count=3")));
+        assert!(!json.to_string().contains("unavailable in this environment"));
+    }
+}
+
+#[cfg(test)]
 mod runtime_probe_tests {
     use super::*;
     use std::{fs, path::PathBuf, time::Instant};
@@ -6762,6 +7086,8 @@ mod runtime_probe_tests {
     use kokura_bridge::{SymbolInfo, SymbolTable};
     use serde_json::to_string;
 
+    // Resolve a local directory three levels above the crate for the optional profiling fixture.
+    // This is not a portable fixture discovery mechanism for every checkout layout.
     fn workspace_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -6771,15 +7097,18 @@ mod runtime_probe_tests {
             .expect("workspace root")
     }
 
+    // Construct the optional local profiling ROM path; the helper does not verify that the asset exists.
     fn reversi_rom_path() -> PathBuf {
         workspace_root().join("reversi").join("reversi.gbc")
     }
 
+    // Construct the matching optional local symbol-map path.
     fn reversi_map_path() -> PathBuf {
         workspace_root().join("reversi").join("reversi.map")
     }
 
     #[test]
+    // Check plain and embedded compiler thunk markers plus a symbol with no bank marker.
     fn parses_kitaqgb_thunk_target_bank() {
         assert_eq!(kitaqgb_thunk_target_bank("__kq_thunk_b6_Draw"), Some(6));
         assert_eq!(kitaqgb_thunk_target_bank("__kq_thunk_b255_Test"), Some(255));
@@ -6791,6 +7120,8 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Feed recognized transitions directly to the heuristic and check they reset reversal tracking.
+    // No compiler thunk instructions are executed by this test.
     fn compiler_thunk_round_trips_do_not_raise_bank_thrash_score() {
         let mut session = DebugSession::new(Machine::new());
         for _ in 0..8 {
@@ -6803,6 +7134,7 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Feed five alternating bank transitions and check the fourth reversal emits exactly one suspicion.
     fn unknown_consecutive_bank_reversals_raise_one_thrash_event() {
         let mut session = DebugSession::new(Machine::new());
         for (from, to) in [(1, 2), (2, 1), (1, 2), (2, 1), (1, 2)] {
@@ -6820,6 +7152,7 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Insert a synthetic pending return within the grace period and check no missing-return event is emitted.
     fn active_far_call_at_short_window_end_is_not_missing() {
         let mut session = DebugSession::new(Machine::new());
         session.pending_bank_returns.push(PendingBankReturn {
@@ -6837,6 +7170,7 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Advance a synthetic pending return to 121 elapsed frames and check it is reported stale.
     fn stale_far_call_return_is_reported_after_grace_period() {
         let mut session = DebugSession::new(Machine::new());
         session.pending_bank_returns.push(PendingBankReturn {
@@ -6857,6 +7191,7 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Check the debugger's fixed-window bank convention against synthetic symbol metadata.
     fn fixed_bank_symbol_lookup_ignores_current_switchable_bank() {
         let mut session = DebugSession::new(Machine::new());
         session.symbol_table = Some(SymbolTable {
@@ -6885,6 +7220,8 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Capture baselines, mutate synthetic RAM and verify byte/scalar/diff previews and truncation.
+    // The named state, cursor and board are test data rather than resolved ROM variables.
     fn watched_memory_preview_bytes_are_reported() {
         let mut session = DebugSession::new(Machine::new());
         let initial_game_state = session.machine.peek8(0xFFC6);
@@ -6966,6 +7303,8 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Seed metadata, PC/cycle histograms and events directly, then check grouping,
+    // static-hotspot propagation and bank-transition summaries without running a ROM.
     fn profiler_surface_reports_function_and_bank_activity() {
         let mut session = DebugSession::new(Machine::new());
         session.symbol_table = Some(SymbolTable {
@@ -7070,6 +7409,8 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Seed stack bytes, metadata, counters and events; check coarse MMIO buckets,
+    // ABI issue status and stack/register decoding. This verifies report construction, not executed calls.
     fn heatmap_and_abi_surfaces_report_toolchain_and_runtime_hints() {
         let mut session = DebugSession::new(Machine::new());
         session.machine.cpu.pc = 0x0100;
@@ -7204,6 +7545,8 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Assign caller/callee register samples manually and check inferred fastcall and
+    // wrapper scratch rules. The test does not execute argument transport or a bank thunk.
     fn abi_call_boundary_reports_fastcall_transport_across_recent_contexts() {
         let mut session = DebugSession::new(Machine::new());
         session.machine.cpu.pc = 0x4000;
@@ -7354,6 +7697,8 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Construct caller, near-end callee and resumed caller samples, then check
+    // return-carrier/stack comparisons and the metadata-distance heuristic without executing RET.
     fn abi_return_boundary_reports_near_ret_register_stability() {
         let mut session = DebugSession::new(Machine::new());
         session.symbol_table = Some(SymbolTable {
@@ -7516,6 +7861,8 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Classify a synthetic bank-helper symbol and check preserved versus scratch
+    // register observations between manually supplied contexts.
     fn abi_intrinsic_boundary_reports_bank_helper_contract_and_scratch() {
         let mut session = DebugSession::new(Machine::new());
         session.symbol_table = Some(SymbolTable {
@@ -7632,6 +7979,7 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Check inferred video-helper scratch roles and observational A changes using synthetic contexts.
     fn abi_intrinsic_boundary_reports_video_helper_contracts() {
         let mut session = DebugSession::new(Machine::new());
         session.symbol_table = Some(SymbolTable {
@@ -7741,6 +8089,7 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Check inferred memory-helper roles and observed register changes; no bytes are copied by a helper here.
     fn abi_intrinsic_boundary_reports_memory_transport_contracts() {
         let mut session = DebugSession::new(Machine::new());
         session.symbol_table = Some(SymbolTable {
@@ -7846,6 +8195,8 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Arm two core serial devices, exchange one byte and check data/IRQ/event propagation.
+    // This proves the cooperative byte API, not cable timing or multi-frame multiplayer behavior.
     fn debug_sessions_can_exchange_serial_with_peer() {
         let mut left = DebugSession::new(Machine::new());
         let mut right = DebugSession::new(Machine::new());
@@ -7872,6 +8223,8 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Map synthetic HRAM variables and check peer selection accepts a valid index
+    // and rejects it when the host reports too few sessions.
     fn named_variable_reads_support_link4_peer_selection() {
         let mut session = DebugSession::new(Machine::new());
         session.set_symbol_table(SymbolTable {
@@ -7921,6 +8274,8 @@ mod runtime_probe_tests {
     }
 
     #[test]
+    // Insert a synthetic checkpoint and two events, then check exported hashes and
+    // slice counts. No checkpoint recording, rewind or deterministic re-execution is exercised.
     fn replay_report_includes_watch_hashes_and_slice_summary() {
         let mut session = DebugSession::new(Machine::new());
         session.start_frame_counter = 0;
@@ -7982,6 +8337,9 @@ mod runtime_probe_tests {
 
     #[test]
     #[ignore = "manual profiling probe for real-ROM runtime cost"]
+    // Optional ignored probe requiring a local ROM/map pair. Time one core frame,
+    // one debug frame, report generation, JSON encoding and symbol-aware execution.
+    // Only the bare-core loop has the explicit 500000-step guard; this is not a default regression test.
     fn profile_reversi_runtime_cost_breakdown() {
         let rom_path = reversi_rom_path();
         let map_path = reversi_map_path();

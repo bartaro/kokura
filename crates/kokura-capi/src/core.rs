@@ -10,8 +10,14 @@ use crate::{
     strings::into_c_string_ptr,
 };
 
+// All non-null handles must be live allocations from this library. Calls
+// borrow the machine exclusively, even for getters: serialize access and do
+// not use a handle after destruction. Raw pointer validity is caller-owned.
 const KOKURA_CAPI_VERSION: &str = "kokura-capi-v1";
 
+// Treat null as absent; otherwise borrow the Machine behind the opaque
+// handle. The caller must guarantee provenance, liveness and exclusive access
+// for the entire borrow. Non-null pointers are not validated by this cast.
 fn handle_from_ptr<'a>(handle: *mut KokuraCoreHandle) -> Option<&'a mut Machine> {
     if handle.is_null() {
         None
@@ -20,6 +26,8 @@ fn handle_from_ptr<'a>(handle: *mut KokuraCoreHandle) -> Option<&'a mut Machine>
     }
 }
 
+// Copy registers, paired values, banks, clocks and execution/mode flags
+// into the C-layout snapshot without advancing emulation.
 fn cpu_snapshot(machine: &Machine) -> KokuraCpuSnapshot {
     KokuraCpuSnapshot {
         pc: machine.cpu.pc,
@@ -42,12 +50,16 @@ fn cpu_snapshot(machine: &Machine) -> KokuraCpuSnapshot {
 }
 
 #[no_mangle]
+// Allocate a new machine and transfer the opaque handle to the caller;
+// release it once with kokura_core_destroy from the same library.
 pub extern "C" fn kokura_core_create() -> *mut KokuraCoreHandle {
     let machine = Box::new(Machine::new());
     Box::into_raw(machine) as *mut KokuraCoreHandle
 }
 
 #[no_mangle]
+// Drop the live machine allocation, accepting null. A non-null handle
+// must originate from this library and must not be borrowed or destroyed twice.
 pub unsafe extern "C" fn kokura_core_destroy(handle: *mut KokuraCoreHandle) {
     if !handle.is_null() {
         let _ = Box::from_raw(handle as *mut Machine);
@@ -55,6 +67,9 @@ pub unsafe extern "C" fn kokura_core_destroy(handle: *mut KokuraCoreHandle) {
 }
 
 #[no_mangle]
+// Copy rom_len readable bytes into owned storage and load the cartridge.
+// Reject null/empty input or load errors with false; detailed errors are not
+// returned by this core-only API.
 pub unsafe extern "C" fn kokura_core_load_rom(
     handle: *mut KokuraCoreHandle,
     rom_ptr: *const u8,
@@ -71,6 +86,9 @@ pub unsafe extern "C" fn kokura_core_load_rom(
 }
 
 #[no_mangle]
+// Advance one machine step and optionally fill a writable result object.
+// The returned framebuffer is borrowed; inspect/copy it before mutating or
+// destroying the machine. Failure does not promise an unchanged machine.
 pub unsafe extern "C" fn kokura_core_step(
     handle: *mut KokuraCoreHandle,
     out_result: *mut KokuraStepResult,
@@ -98,6 +116,7 @@ pub unsafe extern "C" fn kokura_core_step(
 }
 
 #[no_mangle]
+// Run one frame and return whether execution completed without an error.
 pub unsafe extern "C" fn kokura_core_run_frame(handle: *mut KokuraCoreHandle) -> bool {
     let Some(machine) = handle_from_ptr(handle) else {
         return false;
@@ -106,6 +125,8 @@ pub unsafe extern "C" fn kokura_core_run_frame(handle: *mut KokuraCoreHandle) ->
 }
 
 #[no_mangle]
+// Run up to the requested frames, returning false at the first error.
+// Earlier progress remains applied; a valid handle with zero frames succeeds.
 pub unsafe extern "C" fn kokura_core_run_frames(
     handle: *mut KokuraCoreHandle,
     frames: u64,
@@ -122,6 +143,8 @@ pub unsafe extern "C" fn kokura_core_run_frames(
 }
 
 #[no_mangle]
+// Apply the host input mask through the machine-level input path,
+// including its modeled edge handling. Null handles return false.
 pub unsafe extern "C" fn kokura_core_set_joypad_mask(
     handle: *mut KokuraCoreHandle,
     mask: u8,
@@ -134,6 +157,8 @@ pub unsafe extern "C" fn kokura_core_set_joypad_mask(
 }
 
 #[no_mangle]
+// Borrow the byte framebuffer, or return null for a null handle.
+// Do not free it; copy/read it before any machine mutation or destruction.
 pub unsafe extern "C" fn kokura_core_framebuffer_ptr(handle: *mut KokuraCoreHandle) -> *const u8 {
     let Some(machine) = handle_from_ptr(handle) else {
         return ptr::null();
@@ -142,6 +167,7 @@ pub unsafe extern "C" fn kokura_core_framebuffer_ptr(handle: *mut KokuraCoreHand
 }
 
 #[no_mangle]
+// Return the byte framebuffer element count, or zero for a null handle.
 pub unsafe extern "C" fn kokura_core_framebuffer_len(handle: *mut KokuraCoreHandle) -> usize {
     handle_from_ptr(handle)
         .map(|machine| machine.framebuffer().len())
@@ -149,6 +175,8 @@ pub unsafe extern "C" fn kokura_core_framebuffer_len(handle: *mut KokuraCoreHand
 }
 
 #[no_mangle]
+// Borrow the RGB555 word framebuffer, or return null for a null handle.
+// The machine retains ownership; consume it before mutation or destruction.
 pub unsafe extern "C" fn kokura_core_framebuffer_rgb555_ptr(
     handle: *mut KokuraCoreHandle,
 ) -> *const u16 {
@@ -159,6 +187,7 @@ pub unsafe extern "C" fn kokura_core_framebuffer_rgb555_ptr(
 }
 
 #[no_mangle]
+// Return the number of u16 RGB555 elements, not the byte size; null is zero.
 pub unsafe extern "C" fn kokura_core_framebuffer_rgb555_len(
     handle: *mut KokuraCoreHandle,
 ) -> usize {
@@ -168,6 +197,7 @@ pub unsafe extern "C" fn kokura_core_framebuffer_rgb555_len(
 }
 
 #[no_mangle]
+// Report the machine compatibility-mode flag, using false for null.
 pub unsafe extern "C" fn kokura_core_is_cgb_compat_mode(handle: *mut KokuraCoreHandle) -> bool {
     handle_from_ptr(handle)
         .map(|machine| machine.is_cgb_compat_mode())
@@ -175,6 +205,8 @@ pub unsafe extern "C" fn kokura_core_is_cgb_compat_mode(handle: *mut KokuraCoreH
 }
 
 #[no_mangle]
+// Return the controller ROM-bank label, using zero for null. A zero
+// result alone cannot distinguish a valid bank-zero selection from null.
 pub unsafe extern "C" fn kokura_core_current_rom_bank(handle: *mut KokuraCoreHandle) -> u16 {
     handle_from_ptr(handle)
         .map(|m| m.current_rom_bank())
@@ -182,6 +214,7 @@ pub unsafe extern "C" fn kokura_core_current_rom_bank(handle: *mut KokuraCoreHan
 }
 
 #[no_mangle]
+// Return the controller RAM-bank label, using zero for null.
 pub unsafe extern "C" fn kokura_core_current_ram_bank(handle: *mut KokuraCoreHandle) -> u16 {
     handle_from_ptr(handle)
         .map(|m| m.current_ram_bank())
@@ -189,6 +222,8 @@ pub unsafe extern "C" fn kokura_core_current_ram_bank(handle: *mut KokuraCoreHan
 }
 
 #[no_mangle]
+// Fill one valid writable snapshot object; reject null handle/output.
+// The copied snapshot contains no borrowed framebuffer pointer.
 pub unsafe extern "C" fn kokura_core_cpu_snapshot(
     handle: *mut KokuraCoreHandle,
     out_snapshot: *mut KokuraCpuSnapshot,
@@ -204,6 +239,8 @@ pub unsafe extern "C" fn kokura_core_cpu_snapshot(
 }
 
 #[no_mangle]
+// Inspect a mapped byte without ordinary device-read side effects.
+// A null handle returns FF, which is also a possible memory value.
 pub unsafe extern "C" fn kokura_core_peek8(handle: *mut KokuraCoreHandle, addr: u16) -> u8 {
     handle_from_ptr(handle)
         .map(|m| m.peek8(addr))
@@ -211,6 +248,8 @@ pub unsafe extern "C" fn kokura_core_peek8(handle: *mut KokuraCoreHandle, addr: 
 }
 
 #[no_mangle]
+// Perform an ordinary machine bus read, including modeled side effects;
+// null returns FF. Use peek8 for observational inspection.
 pub unsafe extern "C" fn kokura_core_read8(handle: *mut KokuraCoreHandle, addr: u16) -> u8 {
     handle_from_ptr(handle)
         .map(|m| m.read8(addr))
@@ -218,6 +257,8 @@ pub unsafe extern "C" fn kokura_core_read8(handle: *mut KokuraCoreHandle, addr: 
 }
 
 #[no_mangle]
+// Perform an ordinary machine bus write; true means the call was made,
+// not that hardware gates necessarily accepted or retained the byte.
 pub unsafe extern "C" fn kokura_core_write8(
     handle: *mut KokuraCoreHandle,
     addr: u16,
@@ -231,6 +272,9 @@ pub unsafe extern "C" fn kokura_core_write8(
 }
 
 #[no_mangle]
+// Serialize the MachineState payload, including cartridge storage,
+// into an owned UTF-8 C string. Free it with kokura_string_free; null reports
+// failure. This JSON is not the binary KQS file envelope.
 pub unsafe extern "C" fn kokura_core_save_state_json(handle: *mut KokuraCoreHandle) -> *mut c_char {
     let Some(machine) = handle_from_ptr(handle) else {
         return ptr::null_mut();
@@ -242,6 +286,9 @@ pub unsafe extern "C" fn kokura_core_save_state_json(handle: *mut KokuraCoreHand
 }
 
 #[no_mangle]
+// Decode a readable NUL-terminated UTF-8 MachineState JSON string and
+// apply it. This wrapper performs no payload validation or live-ROM identity
+// check after decoding; false reports null, UTF-8 or JSON decoding failure.
 pub unsafe extern "C" fn kokura_core_load_state_json(
     handle: *mut KokuraCoreHandle,
     state_json: *const c_char,
@@ -263,6 +310,7 @@ pub unsafe extern "C" fn kokura_core_load_state_json(
 }
 
 #[no_mangle]
+// Return output samples per second, or zero for a null handle.
 pub unsafe extern "C" fn kokura_core_audio_sample_rate(handle: *mut KokuraCoreHandle) -> u32 {
     handle_from_ptr(handle)
         .map(|m| m.audio_sample_rate())
@@ -270,6 +318,7 @@ pub unsafe extern "C" fn kokura_core_audio_sample_rate(handle: *mut KokuraCoreHa
 }
 
 #[no_mangle]
+// Return queued stereo frames, not interleaved sample elements; null is zero.
 pub unsafe extern "C" fn kokura_core_audio_frames_available(
     handle: *mut KokuraCoreHandle,
 ) -> usize {
@@ -279,6 +328,7 @@ pub unsafe extern "C" fn kokura_core_audio_frames_available(
 }
 
 #[no_mangle]
+// Return the accumulated dropped-audio-frame count, or zero for null.
 pub unsafe extern "C" fn kokura_core_audio_frames_dropped(handle: *mut KokuraCoreHandle) -> u64 {
     handle_from_ptr(handle)
         .map(|m| m.audio_frames_dropped())
@@ -286,6 +336,7 @@ pub unsafe extern "C" fn kokura_core_audio_frames_dropped(handle: *mut KokuraCor
 }
 
 #[no_mangle]
+// Return audio queue capacity in stereo frames, or zero for null.
 pub unsafe extern "C" fn kokura_core_audio_buffer_capacity_frames(
     handle: *mut KokuraCoreHandle,
 ) -> usize {
@@ -295,6 +346,8 @@ pub unsafe extern "C" fn kokura_core_audio_buffer_capacity_frames(
 }
 
 #[no_mangle]
+// Request an audio queue capacity and return whether the machine accepts
+// it; null and invalid-capacity errors return false.
 pub unsafe extern "C" fn kokura_core_set_audio_buffer_capacity_frames(
     handle: *mut KokuraCoreHandle,
     capacity_frames: usize,
@@ -308,6 +361,9 @@ pub unsafe extern "C" fn kokura_core_set_audio_buffer_capacity_frames(
 }
 
 #[no_mangle]
+// Drain up to max_frames stereo frames into caller-owned storage and
+// return the number drained. dst must hold 2 * max_frames i16 elements
+// and must not overlap source storage; null/zero requests drain nothing.
 pub unsafe extern "C" fn kokura_core_audio_copy_interleaved_i16(
     handle: *mut KokuraCoreHandle,
     dst: *mut i16,
@@ -328,6 +384,7 @@ pub unsafe extern "C" fn kokura_core_audio_copy_interleaved_i16(
 }
 
 #[no_mangle]
+// Allocate an owned C ABI version string; release it with kokura_string_free.
 pub extern "C" fn kokura_version_string() -> *mut c_char {
     into_c_string_ptr(KOKURA_CAPI_VERSION)
 }

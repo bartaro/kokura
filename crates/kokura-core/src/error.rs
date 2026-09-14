@@ -1,6 +1,8 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+// Expose cartridge, execution and saved-state failures through one error
+// type. I/O and bincode errors retain their underlying source via From.
 pub enum CoreError {
     #[error("ROM too small: {0} bytes")]
     RomTooSmall(usize),

@@ -29,6 +29,7 @@ pub struct Cartridge {
 }
 
 impl Cartridge {
+    // Create a zero-filled 32 KiB placeholder cartridge with no RAM or active bank controller.
     pub fn empty() -> Self {
         Self {
             rom: vec![0; 0x8000],
@@ -46,10 +47,14 @@ impl Cartridge {
         }
     }
 
+    // Require enough bytes for the header, select a supported mapper and allocate zeroed RAM.
+    // This loader does not verify logo/checksums or require the byte length declared by rom_size_code.
     pub fn from_rom(rom: Vec<u8>) -> Result<Self, CoreError> {
         if rom.len() < 0x150 {
             return Err(CoreError::RomTooSmall(rom.len()));
         }
+        // Preserve the current full 16-byte title-window interpretation, including byte 0x143.
+        // NUL terminates the lossy UTF-8 title; this window also overlaps the CGB flag.
         let title_bytes = &rom[0x134..=0x143];
         let end = title_bytes
             .iter()
@@ -97,26 +102,33 @@ impl Cartridge {
         })
     }
 
+    // Expose the selected mapper's current ROM-bank label.
     pub fn current_rom_bank(&self) -> u16 {
         self.mbc.current_rom_bank()
     }
 
+    // Expose the selected mapper's current RAM-bank label.
     pub fn current_ram_bank(&self) -> u16 {
         self.mbc.current_ram_bank()
     }
 
+    // Recognize the two exact CGB support flag values in the parsed header.
     pub fn supports_cgb(&self) -> bool {
         matches!(self.header.cgb_flag, 0x80 | 0xC0)
     }
 
+    // Distinguish a CGB-required header from one supporting both hardware modes.
     pub fn cgb_only(&self) -> bool {
         self.header.cgb_flag == 0xC0
     }
 
+    // Recognize the exact SGB support flag; this query does not emulate SGB features.
     pub fn supports_sgb(&self) -> bool {
         self.header.sgb_flag == 0x03
     }
 
+    // Require both a listed battery cartridge type and a nonempty allocated RAM buffer.
+    // This is a RAM-persistence predicate, not a complete test for RTC or other persistent device state.
     pub fn has_battery_backed_ram(&self) -> bool {
         matches!(
             self.header.cartridge_type,
@@ -136,6 +148,7 @@ impl Cartridge {
         ) && !self.ram.is_empty()
     }
 
+    // Clone only external RAM for battery saves; mapper registers and RTC state are not included.
     pub fn battery_save_bytes(&self) -> Option<Vec<u8>> {
         if self.has_battery_backed_ram() {
             Some(self.ram.clone())
@@ -144,18 +157,23 @@ impl Cartridge {
         }
     }
 
+    // Report pending RAM persistence only when this cartridge qualifies for battery saves.
     pub fn battery_save_dirty(&self) -> bool {
         self.has_battery_backed_ram() && self.battery_dirty
     }
 
+    // Combine battery-save eligibility with the mapper's current RAM-access gate.
     pub fn battery_ram_access_enabled(&self) -> bool {
         self.has_battery_backed_ram() && self.mbc.ram_access_enabled()
     }
 
+    // Acknowledge persistence by clearing the dirty flag without touching RAM.
     pub fn mark_battery_save_clean(&mut self) {
         self.battery_dirty = false;
     }
 
+    // Copy the common prefix into eligible RAM, preserving any remaining RAM bytes.
+    // Extra input bytes are ignored and a successful eligible load clears the dirty flag.
     pub fn load_battery_save_bytes(&mut self, bytes: &[u8]) -> usize {
         if !self.has_battery_backed_ram() {
             return 0;
@@ -166,6 +184,7 @@ impl Cartridge {
         len
     }
 
+    // Map the active enum variant to the public mapper identity used by reports and state metadata.
     pub fn mapper_kind(&self) -> MapperKind {
         match &self.mbc {
             Mbc::RomOnly(_) => MapperKind::RomOnly,
@@ -183,19 +202,26 @@ impl Cartridge {
         }
     }
 
+    // Delegate bank selection and out-of-range behavior to the active mapper.
     pub fn read_rom(&self, addr: u16) -> u8 {
         self.mbc.read_rom(&self.rom, addr)
     }
 
+    // Route a controller-register write without marking the external RAM save dirty.
     pub fn write_mbc(&mut self, addr: u16, value: u8) {
         self.mbc.write(addr, value);
     }
 
+    // Delegate reads, bank selection and device-register multiplexing to the mapper.
     pub fn read_ram(&self, addr: u16) -> u8 {
         self.mbc.read_ram(&self.ram, addr)
     }
 
+    // Compare the addressed mapper-visible value before and after a write to mark battery RAM dirty.
+    // This does not compare the full RAM array or track every persistent mapper-side change.
     pub fn write_ram(&mut self, addr: u16, value: u8) {
+        // Use the mapper-visible read path, so register-mapped writes may not correspond
+        // to a simple changed byte in the backing RAM vector.
         let before = self.mbc.read_ram(&self.ram, addr);
         self.mbc.write_ram(&mut self.ram, addr, value);
         let after = self.mbc.read_ram(&self.ram, addr);
@@ -204,11 +230,14 @@ impl Cartridge {
         }
     }
 
+    // Advance mapper-specific timing with the cycle count supplied by the machine.
     pub fn tick(&mut self, cycles: u32) {
         self.mbc.tick(cycles);
     }
 }
 
+// Override header RAM sizing for MBC2 and MBC7; otherwise map known size codes
+// to byte counts, treating unknown codes as no allocated RAM.
 fn ram_size_bytes(cartridge_type: u8, code: u8) -> usize {
     match cartridge_type {
         0x05..=0x06 => Mbc2::RAM_LEN,
@@ -229,6 +258,7 @@ fn ram_size_bytes(cartridge_type: u8, code: u8) -> usize {
 mod tests {
     use super::*;
 
+    // Build an original synthetic header fixture without external ROM content.
     fn make_rom(cartridge_type: u8, ram_size_code: u8) -> Vec<u8> {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0x00;
@@ -241,6 +271,7 @@ mod tests {
     }
 
     #[test]
+    // Check constructor acceptance of every listed type, not mapper hardware compatibility.
     fn all_supported_cartridge_types_load() {
         let supported = [
             0x00, 0x01, 0x02, 0x03, 0x05, 0x06, 0x08, 0x09, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11,
@@ -258,6 +289,7 @@ mod tests {
     }
 
     #[test]
+    // Check that MBC2 and MBC7 override a zero RAM-size header code.
     fn special_ram_sizes_are_allocated() {
         let mbc2 = Cartridge::from_rom(make_rom(0x06, 0x00)).unwrap();
         assert_eq!(mbc2.ram.len(), Mbc2::RAM_LEN);
@@ -267,6 +299,7 @@ mod tests {
     }
 
     #[test]
+    // Distinguish the battery and non-battery MBC1 variants with allocated RAM.
     fn battery_backed_ram_detection_matches_common_types() {
         let battery = Cartridge::from_rom(make_rom(0x03, 0x03)).unwrap();
         assert!(battery.has_battery_backed_ram());
@@ -276,6 +309,7 @@ mod tests {
     }
 
     #[test]
+    // Load a short save prefix, compare the exported prefix and verify the clean flag.
     fn battery_save_bytes_round_trip_into_ram() {
         let mut cart = Cartridge::from_rom(make_rom(0x03, 0x03)).unwrap();
         let bytes = [0x12, 0x34, 0x56, 0x78];
@@ -287,6 +321,7 @@ mod tests {
     }
 
     #[test]
+    // Enable MBC1 RAM, change one byte and check explicit clean acknowledgement.
     fn battery_dirty_tracks_external_ram_writes() {
         let mut cart = Cartridge::from_rom(make_rom(0x03, 0x03)).unwrap();
         assert!(!cart.battery_save_dirty());
@@ -298,6 +333,7 @@ mod tests {
     }
 
     #[test]
+    // Check that enabling and disabling mapper RAM affects the persistence-access query.
     fn battery_ram_access_enabled_tracks_mapper_gate() {
         let mut cart = Cartridge::from_rom(make_rom(0x03, 0x03)).unwrap();
         assert!(!cart.battery_ram_access_enabled());
@@ -313,6 +349,7 @@ mod cgb_header_tests {
     use super::*;
 
     #[test]
+    // Check the dual-mode CGB flag without claiming CGB-only coverage.
     fn cgb_flag_is_exposed() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0x00;
@@ -328,6 +365,7 @@ mod sgb_header_tests {
     use super::*;
 
     #[test]
+    // Check that the header SGB flag is surfaced by the capability query.
     fn sgb_flag_is_exposed() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100] = 0x00;

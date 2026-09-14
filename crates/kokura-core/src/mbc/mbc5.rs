@@ -13,6 +13,8 @@ pub struct Mbc5 {
 }
 
 impl Default for Mbc5 {
+    // Select ROM bank one and RAM bank zero with RAM and rumble disabled;
+    // the base controller starts without rumble hardware.
     fn default() -> Self {
         Self {
             rom_bank_low: 1,
@@ -26,6 +28,7 @@ impl Default for Mbc5 {
 }
 
 impl Mbc5 {
+    // Construct the default controller with the cartridge rumble capability set.
     pub fn with_rumble(has_rumble: bool) -> Self {
         Self {
             has_rumble,
@@ -33,10 +36,14 @@ impl Mbc5 {
         }
     }
 
+    // Combine eight low bits and one high bit into a nine-bit ROM selector.
+    // Unlike MBC1/MBC2, bank zero is valid in the switchable window.
     pub fn current_rom_bank(&self) -> u16 {
         (self.rom_bank_low as u16) | (((self.rom_bank_high & 0x01) as u16) << 8)
     }
 
+    // Expose three RAM-bank bits for rumble cartridges or four otherwise;
+    // the rumble control bit does not select RAM.
     pub fn current_ram_bank(&self) -> u16 {
         if self.has_rumble {
             (self.ram_bank & 0x07) as u16
@@ -45,6 +52,8 @@ impl Mbc5 {
         }
     }
 
+    // Read the fixed lower window directly and the upper window through
+    // a wrapped 16 KiB bank; return FF outside ROM addresses.
     pub fn read_rom(&self, rom: &[u8], addr: u16) -> u8 {
         match addr {
             0x0000..=0x3FFF => rom.get(addr as usize).copied().unwrap_or(0xFF),
@@ -56,6 +65,8 @@ impl Mbc5 {
         }
     }
 
+    // Read a wrapped selected 8 KiB bank only while RAM is enabled,
+    // using the caller-supplied cartridge-RAM address.
     pub fn read_ram(&self, ram: &[u8], addr: u16) -> u8 {
         if !self.ram_enabled {
             return 0xFF;
@@ -64,6 +75,8 @@ impl Mbc5 {
         read_ram_bank(ram, self.current_ram_bank() as usize, 0x2000, offset)
     }
 
+    // Write an existing byte of the selected wrapped 8 KiB bank only
+    // while the RAM-enable latch permits it.
     pub fn write_ram(&mut self, ram: &mut [u8], addr: u16, value: u8) {
         if !self.ram_enabled {
             return;
@@ -72,6 +85,9 @@ impl Mbc5 {
         write_ram_bank(ram, self.current_ram_bank() as usize, 0x2000, offset, value);
     }
 
+    // Decode RAM enable and separate low/high ROM-bank registers. RAM-bank
+    // writes also latch rumble on capable cartridges; this stores motor state
+    // without driving a host rumble device.
     pub fn write(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x1FFF => self.ram_enabled = (value & 0x0F) == 0x0A,

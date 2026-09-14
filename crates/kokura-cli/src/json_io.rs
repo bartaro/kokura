@@ -1,8 +1,8 @@
-//! JSONジョブ、リンクジョブ、回帰マトリクスの入出力。
+//! Read and write JSON jobs, link jobs and regression matrices.
 //!
-//! スキーマバージョンをここで固定し、CLIの実行処理がファイル形式の詳細を
-//! 持たないようにします。公開サンプルはROM本体ではなく、利用者が用意した
-//! ROMへの相対パスを指す形に保つのが安全です。
+//! Keep schema versions and file-format details separate from CLI execution.
+//! Published job examples refer to user-supplied ROMs by relative path rather
+//! than embedding ROM data.
 
 pub const JOB_SPEC_SCHEMA_VERSION: &str = "1";
 pub const LINK_JOB_SPEC_SCHEMA_VERSION: &str = "1";
@@ -20,11 +20,14 @@ pub struct JobRun {
     pub frames: u64,
 }
 
+// Use one frame when a present run or stage object omits its frames field.
+// Derived Rust Default still yields zero, including an entirely omitted JobSpec.run object.
 fn default_frames() -> u64 {
     1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// Store the trigger selector and optional snapshot destination for later execution-layer interpretation.
 pub struct SnapshotTrigger {
     #[serde(default)]
     pub condition: Option<String>,
@@ -35,6 +38,7 @@ pub struct SnapshotTrigger {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// Keep per-stage input, outputs, stop conditions and replay controls separate from job-wide settings.
 pub struct JobStage {
     #[serde(default = "default_frames")]
     pub frames: u64,
@@ -53,6 +57,8 @@ pub struct JobStage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// Describe one ROM job. Serde defaults make optional collections/settings empty;
+// this data model performs no path rebasing, file access or cross-field validation.
 pub struct JobSpec {
     #[serde(default)]
     pub schema_version: Option<String>,
@@ -108,6 +114,7 @@ pub struct JobSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// Describe each participant independently, including its slot, ROM, state and debugger controls.
 pub struct LinkSessionSpec {
     #[serde(default)]
     pub name: Option<String>,
@@ -139,6 +146,7 @@ pub struct LinkSessionSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// Combine topology text, optional initial peer and participant specs with the shared run budget.
 pub struct LinkJobSpec {
     #[serde(default)]
     pub schema_version: Option<String>,
@@ -154,6 +162,7 @@ pub struct LinkJobSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// Pair an expected suggestion kind/value with an optional stage selector.
 pub struct ExpectedSuggestion {
     pub kind: String,
     pub value: String,
@@ -162,6 +171,8 @@ pub struct ExpectedSuggestion {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// Represent expected observations and lower-bound counters as data. The matrix runner
+// decides whether observed events, watches and diagnostic output meet these expectations.
 pub struct RegressionCase {
     pub name: String,
     pub job: String,
@@ -208,6 +219,7 @@ pub struct RegressionCase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// Allow an omitted cases list to decode as empty; version compatibility is checked after decoding.
 pub struct RegressionMatrix {
     #[serde(default)]
     pub schema_version: Option<String>,
@@ -215,6 +227,8 @@ pub struct RegressionMatrix {
     pub cases: Vec<RegressionCase>,
 }
 
+// Read UTF-8 JSON, decode the job shape and reject an explicitly unsupported schema version.
+// Referenced paths and execution constraints are resolved by the caller, not by this loader.
 pub fn load_job_file<P: AsRef<Path>>(path: P) -> Result<JobSpec> {
     let text = fs::read_to_string(path.as_ref())
         .with_context(|| format!("failed to read job file: {}", path.as_ref().display()))?;
@@ -229,6 +243,7 @@ pub fn load_job_file<P: AsRef<Path>>(path: P) -> Result<JobSpec> {
     Ok(spec)
 }
 
+// Decode a regression matrix with path-qualified read/parse errors, then check its optional version.
 pub fn load_regression_matrix<P: AsRef<Path>>(path: P) -> Result<RegressionMatrix> {
     let text = fs::read_to_string(path.as_ref()).with_context(|| {
         format!(
@@ -251,6 +266,8 @@ pub fn load_regression_matrix<P: AsRef<Path>>(path: P) -> Result<RegressionMatri
     Ok(matrix)
 }
 
+// Decode link topology/session specifications and check their optional schema version.
+// This step does not construct or validate a running link topology.
 pub fn load_link_job_file<P: AsRef<Path>>(path: P) -> Result<LinkJobSpec> {
     let text = fs::read_to_string(path.as_ref())
         .with_context(|| format!("failed to read link job file: {}", path.as_ref().display()))?;
@@ -269,6 +286,7 @@ pub fn load_link_job_file<P: AsRef<Path>>(path: P) -> Result<LinkJobSpec> {
     Ok(spec)
 }
 
+// Accept an omitted version for legacy files; otherwise require an exact string match.
 fn validate_schema_version(
     path: &Path,
     actual: Option<&str>,

@@ -19,6 +19,8 @@ pub struct Timer {
 }
 
 impl Timer {
+    // Install the modeled post-boot divider value for DMG/CGB and clear programmable
+    // timer state, including any pending overflow reload.
     pub fn initialize_post_boot_state(&mut self, cgb_mode: bool) {
         self.div_counter = if cgb_mode { 0 } else { 0xC600 };
         self.div = (self.div_counter >> 8) as u16;
@@ -28,6 +30,8 @@ impl Timer {
         self.overflow_delay_cycles = 0;
     }
 
+    // Advance one timer cycle at a time, reloading TIMA after the modeled overflow
+    // delay and incrementing on falling edges of the selected divider signal.
     pub fn tick(&mut self, cycles: u32) -> TimerTickResult {
         let mut out = TimerTickResult::default();
         for _ in 0..cycles {
@@ -55,6 +59,9 @@ impl Timer {
         out
     }
 
+    // Advance the same timer state without allocating trace events. Jump directly
+    // to divider falling edges except during the pending reload window, which is
+    // stepped cycle by cycle to preserve reload/interrupt timing.
     pub fn tick_fast(&mut self, cycles: u32) -> bool {
         let mut interrupt_requested = false;
         let mut remaining = cycles;
@@ -128,6 +135,8 @@ impl Timer {
         interrupt_requested
     }
 
+    // Reset the divider. If the selected timer signal was high, resetting it creates
+    // a falling edge and can increment TIMA even though no ordinary tick elapsed.
     pub fn write_div(&mut self, trace: &mut Vec<TimerTraceEvent>) {
         let old_div = self.div_counter;
         if self.timer_signal(old_div, self.tac) {
@@ -138,6 +147,7 @@ impl Timer {
         trace.push(TimerTraceEvent::DivResetEdge { old_div });
     }
 
+    // Write TIMA directly and cancel a pending overflow reload in this timer model.
     pub fn write_tima(&mut self, value: u8) {
         if self.overflow_delay_cycles > 0 {
             self.overflow_delay_cycles = 0;
@@ -145,10 +155,13 @@ impl Timer {
         self.tima = value;
     }
 
+    // Replace the modulo value used by a subsequent delayed TIMA reload.
     pub fn write_tma(&mut self, value: u8) {
         self.tma = value;
     }
 
+    // Keep the three writable control bits and compare the old/new timer signal.
+    // A control write that creates a falling edge also increments TIMA.
     pub fn write_tac(&mut self, value: u8, trace: &mut Vec<TimerTraceEvent>) {
         let old_tac = self.tac;
         let old_signal = self.timer_signal(self.div_counter, old_tac);
@@ -161,6 +174,8 @@ impl Timer {
         }
     }
 
+    // Ignore edges during a pending reload; otherwise increment TIMA and schedule
+    // a four-cycle delayed reload when the byte overflows, recording the overflow event.
     fn increment_tima(&mut self, trace: &mut Vec<TimerTraceEvent>) {
         if self.overflow_delay_cycles > 0 {
             return;
@@ -174,6 +189,7 @@ impl Timer {
         }
     }
 
+    // Apply the same overflow/reload scheduling without generating trace records.
     fn increment_tima_fast(&mut self) {
         if self.overflow_delay_cycles > 0 {
             return;
@@ -185,6 +201,8 @@ impl Timer {
         }
     }
 
+    // Advance the 16-bit divider with wrapping arithmetic in bounded chunks, then
+    // refresh the exposed DIV high byte. This helper does not process TIMA edges.
     fn advance_div_counter(&mut self, cycles: u32) {
         let mut remaining = cycles;
         while remaining > 0 {
@@ -195,6 +213,8 @@ impl Timer {
         self.div = (self.div_counter >> 8) as u16;
     }
 
+    // Return the enabled divider bit selected by TAC; TIMA advances on this
+    // signal's falling edge rather than on every CPU cycle.
     fn timer_signal(&self, div_value: u16, tac: u8) -> bool {
         if tac & 0x04 == 0 {
             return false;
@@ -210,6 +230,7 @@ impl Timer {
 }
 
 impl Default for Timer {
+    // Create a stopped, zeroed timer with no delayed reload pending.
     fn default() -> Self {
         Self {
             div: 0,
@@ -227,6 +248,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Compare traced and fast paths for divider, TIMA, pending reload and interrupt results.
     fn tick_fast_matches_tick_for_basic_progress() {
         let mut slow = Timer::default();
         let mut fast = Timer::default();
@@ -246,6 +268,7 @@ mod tests {
     }
 
     #[test]
+    // Start immediately before an overflow edge and compare both paths across the delayed reload.
     fn tick_fast_matches_tick_across_overflow_reload_window() {
         let mut slow = Timer::default();
         let mut fast = Timer::default();

@@ -9,6 +9,7 @@ use crate::watch::MemoryWatchResult;
 use crate::{DebugEvent, Diagnostic};
 
 #[derive(Debug, Clone, Serialize)]
+// Record the run totals and exact observation coordinates alongside their stated basis.
 pub struct ReportMeta {
     pub frames_executed: u64,
     pub events_recorded: usize,
@@ -24,6 +25,8 @@ pub struct ReportMeta {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Carry counters, estimates and recent observations computed by the session.
+// These fields describe retained evidence; this payload type does not itself detect events.
 pub struct EventSummary {
     pub vblank_count: u64,
     pub timer_interrupt_count: u64,
@@ -127,6 +130,7 @@ pub struct EventSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Aggregate one opcode value with its count and most recent observed code location.
 pub struct UnsupportedOpcodeSummary {
     pub opcode: u8,
     pub count: u64,
@@ -136,6 +140,7 @@ pub struct UnsupportedOpcodeSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Keep source coordinates together with bank/address identity and optional symbol/section labels.
 pub struct SourceLocationReport {
     pub path: String,
     pub line: u32,
@@ -147,6 +152,7 @@ pub struct SourceLocationReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Expose compiler-provided function extent and calling-convention metadata.
 pub struct ToolchainFunctionReport {
     pub name: String,
     pub bank: u16,
@@ -163,6 +169,7 @@ pub struct ToolchainFunctionReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Keep static call-graph estimates distinct from runtime instruction samples.
 pub struct ToolchainStaticEstimateReport {
     pub name: String,
     pub bank: u16,
@@ -178,6 +185,7 @@ pub struct ToolchainStaticEstimateReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Deserialize an optional build hotspot with zero defaults for missing numeric estimates.
 pub struct ToolchainHotspotReport {
     pub name: String,
     #[serde(default)]
@@ -189,6 +197,7 @@ pub struct ToolchainHotspotReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Preserve compiler edge labels and thunk/far-call flags; signed bank values are retained.
 pub struct ToolchainCrossBankEdgeReport {
     pub caller: String,
     pub callee: String,
@@ -205,6 +214,8 @@ pub struct ToolchainCrossBankEdgeReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Carry optional build identity, sizes, call-graph data and ABI findings.
+// Missing metadata defaults to empty values; these fields alone do not authenticate a ROM.
 pub struct ToolchainBuildReport {
     #[serde(default)]
     pub output_rom: Option<String>,
@@ -239,6 +250,8 @@ pub struct ToolchainBuildReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Group current and neighboring symbol/source matches with optional function contracts
+// and the captured execution-context trail.
 pub struct SymbolReport {
     pub pc_symbol: Option<String>,
     pub previous_pc_symbol: Option<String>,
@@ -257,6 +270,7 @@ pub struct SymbolReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Identify a watched address window and its recorded digest without embedding its bytes.
 pub struct ReplayWatchDigestReport {
     pub name: String,
     pub start: u16,
@@ -265,6 +279,7 @@ pub struct ReplayWatchDigestReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Describe activity between replay checkpoints, including endpoints, counters and a slice digest.
 pub struct ReplaySliceReport {
     pub from_checkpoint_index: Option<u64>,
     pub to_checkpoint_index: u64,
@@ -295,6 +310,7 @@ pub struct ReplaySliceReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Keep checkpoint/generation identity, observation coordinates and frame/state/watch digests.
 pub struct ReplayCheckpointReport {
     pub checkpoint_index: u64,
     pub generation: u32,
@@ -315,6 +331,7 @@ pub struct ReplayCheckpointReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Distinguish the requested rewind distance from the checkpoint and frame actually selected.
 pub struct ReplayRewindReport {
     pub requested_frames: u64,
     pub from_frame: u64,
@@ -324,6 +341,7 @@ pub struct ReplayRewindReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Record expected and actual digests at the observed checkpoint/generation.
 pub struct ReplayDivergenceReport {
     pub frame: u64,
     pub cycle: u64,
@@ -334,6 +352,7 @@ pub struct ReplayDivergenceReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Describe a reference comparison mismatch with optional checkpoint/frame coordinates.
 pub struct ReplayReferenceMismatchReport {
     pub kind: String,
     pub checkpoint_index: Option<u64>,
@@ -344,6 +363,8 @@ pub struct ReplayReferenceMismatchReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Provide neighboring replay slices and suggested investigation settings.
+// Recommendations are report data, not commands executed by this type.
 pub struct ReplayDivergenceHelperReport {
     #[serde(default)]
     pub mismatch_slice_index: Option<usize>,
@@ -374,6 +395,7 @@ pub struct ReplayDivergenceHelperReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Describe one proposed conditional capture and its optional state-file destination.
 pub struct ReplayConditionalSnapshotTriggerReport {
     pub kind: String,
     pub value: String,
@@ -382,6 +404,7 @@ pub struct ReplayConditionalSnapshotTriggerReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Keep a proposed replay window, run budget, stops and captures separate from execution results.
 pub struct ReplayConditionalSnapshotPlanReport {
     pub frame_window_start: u64,
     pub frame_window_end: u64,
@@ -397,6 +420,7 @@ pub struct ReplayConditionalSnapshotPlanReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Record whether a capture was attempted, whether it rewound and which state paths were generated.
 pub struct ReplayConditionalSnapshotCaptureReport {
     pub attempted: bool,
     pub rewound: bool,
@@ -412,6 +436,7 @@ pub struct ReplayConditionalSnapshotCaptureReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Combine comparison counts and first mismatch with optional investigation plans and capture outcomes.
 pub struct ReplayReferenceComparisonReport {
     #[serde(default)]
     pub reference_path: Option<String>,
@@ -433,6 +458,7 @@ pub struct ReplayReferenceComparisonReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Expose replay configuration, retained checkpoints and slices, latest rewind and optional divergence.
 pub struct ReplayReport {
     pub enabled: bool,
     pub checkpoint_interval_frames: u64,
@@ -449,6 +475,7 @@ pub struct ReplayReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Carry a sampled hot-loop candidate and its optional source match, without asserting program intent.
 pub struct ForensicHotLoopReport {
     pub rom_bank: u16,
     pub pc: u16,
@@ -458,6 +485,7 @@ pub struct ForensicHotLoopReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Describe a grouped observation with its count, last coordinates and explanatory detail.
 pub struct ForensicHotspotReport {
     pub key: String,
     pub title: String,
@@ -468,6 +496,7 @@ pub struct ForensicHotspotReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Summarize observed mapper controls and bank transitions for investigation.
 pub struct ForensicMapperActivityReport {
     pub mapper: String,
     pub control_writes: u64,
@@ -477,6 +506,7 @@ pub struct ForensicMapperActivityReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Retain unsupported-opcode counts and the latest associated bank, PC and symbol.
 pub struct ForensicUnsupportedOpcodeReport {
     pub opcode: u8,
     pub count: u64,
@@ -486,6 +516,8 @@ pub struct ForensicUnsupportedOpcodeReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Group candidate findings and follow-up notes; generated indicates report availability,
+// not proof that a candidate is an actual program defect.
 pub struct RomForensicsReport {
     pub generated: bool,
     pub hot_loop_candidates: Vec<ForensicHotLoopReport>,
@@ -498,6 +530,7 @@ pub struct RomForensicsReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Combine dynamic samples/cycles with optional static function estimates and source metadata.
 pub struct ProfilerFunctionActivityReport {
     pub name: String,
     pub bank: u16,
@@ -513,6 +546,7 @@ pub struct ProfilerFunctionActivityReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Aggregate per-bank activity and transitions, retaining the leading function labels.
 pub struct ProfilerBankActivityReport {
     pub bank: u16,
     pub samples: u64,
@@ -525,6 +559,7 @@ pub struct ProfilerBankActivityReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Count a directed bank transition and associated far calls with optional endpoint symbols.
 pub struct ProfilerBankTransitionReport {
     pub from_bank: u16,
     pub to_bank: u16,
@@ -535,6 +570,7 @@ pub struct ProfilerBankTransitionReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// State the sampling unit explicitly alongside function, bank and transition activity.
 pub struct ProfilerReport {
     pub generated: bool,
     pub sample_unit: String,
@@ -545,6 +581,7 @@ pub struct ProfilerReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Describe an address bucket, its region label and the accumulated observation count.
 pub struct HeatmapBucketReport {
     pub region: String,
     pub start: u16,
@@ -554,12 +591,14 @@ pub struct HeatmapBucketReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Keep a region-wide count separately from individual heatmap buckets.
 pub struct HeatmapRegionTotalReport {
     pub region: String,
     pub count: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Associate sampled activity with a candidate function for heatmap investigation.
 pub struct HeatmapCulpritFunctionReport {
     pub name: String,
     pub bank: u16,
@@ -568,6 +607,7 @@ pub struct HeatmapCulpritFunctionReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Associate sampled activity with a candidate bank for heatmap investigation.
 pub struct HeatmapCulpritBankReport {
     pub bank: u16,
     pub samples: u64,
@@ -575,6 +615,7 @@ pub struct HeatmapCulpritBankReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Group memory buckets, region totals and candidate activity correlations with their notes.
 pub struct HeatmapReport {
     pub generated: bool,
     pub buckets: Vec<HeatmapBucketReport>,
@@ -585,6 +626,7 @@ pub struct HeatmapReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Capture the register subset used by ABI checks, including the combined HL pair.
 pub struct AbiRegisterSnapshotReport {
     pub a: u8,
     pub b: u8,
@@ -599,6 +641,8 @@ pub struct AbiRegisterSnapshotReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Keep bounded stack/argument previews, truncation flags and optional decoded return data
+// together with the expected argument and result sizes.
 pub struct AbiStackWindowReport {
     pub sp: u16,
     pub region: String,
@@ -614,6 +658,7 @@ pub struct AbiStackWindowReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Compare optional caller/callee-entry values against a stated register expectation.
 pub struct AbiBoundaryRegisterCheckReport {
     pub register: String,
     #[serde(default)]
@@ -626,6 +671,7 @@ pub struct AbiBoundaryRegisterCheckReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Carry the register role, confidence and explanation used to interpret boundary observations.
 pub struct AbiRegisterContractRuleReport {
     pub register: String,
     pub role: String,
@@ -634,6 +680,7 @@ pub struct AbiRegisterContractRuleReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Combine call-edge metadata, optional contexts and register checks without inventing missing observations.
 pub struct AbiCallBoundaryReport {
     #[serde(default)]
     pub caller_function: Option<String>,
@@ -659,6 +706,7 @@ pub struct AbiCallBoundaryReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Compare optional callee and resumed-caller values against a stated return-boundary expectation.
 pub struct AbiReturnRegisterCheckReport {
     pub register: String,
     #[serde(default)]
@@ -671,6 +719,7 @@ pub struct AbiReturnRegisterCheckReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Retain pre-call, near-return and resumed contexts alongside edge information and contract checks.
 pub struct AbiReturnBoundaryReport {
     pub caller_function: String,
     pub caller_bank: u16,
@@ -699,6 +748,7 @@ pub struct AbiReturnBoundaryReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Describe the observed before/after values and expectation for one intrinsic register.
 pub struct AbiIntrinsicRegisterCheckReport {
     pub register: String,
     #[serde(default)]
@@ -711,6 +761,7 @@ pub struct AbiIntrinsicRegisterCheckReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// State intrinsic contract strength and available contexts separately from observed register changes.
 pub struct AbiIntrinsicBoundaryReport {
     pub intrinsic_symbol: String,
     pub intrinsic_kind: String,
@@ -731,6 +782,8 @@ pub struct AbiIntrinsicBoundaryReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Combine compiler issues, runtime boundary evidence, register/stack snapshots and explicit status.
+// Availability of this payload is separate from a successful ABI verification result.
 pub struct AbiVerificationReport {
     pub generated: bool,
     pub abi_mode: Option<String>,
@@ -751,6 +804,7 @@ pub struct AbiVerificationReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Show active memory banks together with their raw CGB control registers and speed/mode flags.
 pub struct VisualizationBankStateReport {
     pub current_rom_bank: u16,
     pub current_ram_bank: u16,
@@ -763,6 +817,7 @@ pub struct VisualizationBankStateReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Describe one layer's enable/change flags, digest and explanatory detail.
 pub struct VisualizationLayerReport {
     pub key: String,
     pub enabled: bool,
@@ -772,12 +827,14 @@ pub struct VisualizationLayerReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Preserve palette index and packed RGB555 colors for display consumers.
 pub struct VisualizationPalettePreviewReport {
     pub palette_index: u8,
     pub colors_rgb555: Vec<u16>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Keep DMG palette mappings separate from CGB palette previews and blocked-write counts.
 pub struct VisualizationPaletteReport {
     pub dmg_bgp: Vec<u8>,
     pub dmg_obp0: Vec<u8>,
@@ -790,6 +847,7 @@ pub struct VisualizationPaletteReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Summarize a tile by bank/index, nonzero byte count and digest rather than embedding image pixels.
 pub struct VisualizationTilePreviewReport {
     pub bank: u8,
     pub tile_index: u16,
@@ -798,6 +856,7 @@ pub struct VisualizationTilePreviewReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Describe selected maps/addressing and bounded tile previews for both VRAM banks.
 pub struct VisualizationTileReport {
     pub bg_map_base: u16,
     pub window_map_base: u16,
@@ -809,6 +868,7 @@ pub struct VisualizationTileReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Carry an OAM slot's raw coordinate, tile and attribute bytes for inspection.
 pub struct VisualizationSpriteReport {
     pub slot: u8,
     pub y: u8,
@@ -818,6 +878,7 @@ pub struct VisualizationSpriteReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Keep sprite-height settings, populated OAM counts and estimated visibility distinct.
 pub struct VisualizationOamReport {
     pub sprite_height: u8,
     pub nonzero_entries: u32,
@@ -826,6 +887,7 @@ pub struct VisualizationOamReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Group DMA lifecycle counts and estimated stall cycles for display, without issuing DMA transfers.
 pub struct VisualizationDmaReport {
     pub oam_dma_count: u64,
     pub oam_dma_start_count: u64,
@@ -841,6 +903,7 @@ pub struct VisualizationDmaReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Expose APU control state, queue counters and wave preview; this is not an audio recording.
 pub struct VisualizationApuReport {
     pub master_enabled: bool,
     pub channel_enable_mask: u8,
@@ -859,6 +922,7 @@ pub struct VisualizationApuReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Group optional-report availability and display data for banks, layers, palettes, tiles, OAM, DMA and APU.
 pub struct VisualizationsReport {
     pub generated: bool,
     pub bank_state: VisualizationBankStateReport,
@@ -872,6 +936,7 @@ pub struct VisualizationsReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Record packaging presence flags; file presence alone says nothing about its contents or license validity.
 pub struct ReleasePackagingSurfaceReport {
     pub license_present: bool,
     pub readme_present: bool,
@@ -883,6 +948,7 @@ pub struct ReleasePackagingSurfaceReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Keep individual validation flags explicit, especially whether only static checks were performed.
 pub struct ReleaseSmokeSurfaceReport {
     pub static_checks_only: bool,
     pub json_schema_validated: bool,
@@ -894,6 +960,7 @@ pub struct ReleaseSmokeSurfaceReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Describe observed diagnostics and report availability without implying general hardware compatibility.
 pub struct ReleaseStabilitySurfaceReport {
     pub unsupported_opcode_count: u64,
     pub diagnostics_count: usize,
@@ -906,6 +973,8 @@ pub struct ReleaseStabilitySurfaceReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Carry readiness assessment, blockers and recommended commands as data.
+// This model neither executes the commands nor performs publication.
 pub struct ReleaseReadinessReport {
     pub generated: bool,
     pub readiness_level: String,
@@ -919,6 +988,8 @@ pub struct ReleaseReadinessReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Serialize a complete debug observation with optional analysis sections. An absent
+// section denotes unavailable output rather than a successful check with no findings.
 pub struct DebugReport {
     pub schema_version: &'static str,
     pub meta: ReportMeta,

@@ -1,9 +1,8 @@
-//! カートリッジのメモリバンクコントローラ群。
+//! Cartridge memory-bank controllers.
 //!
-//! 各MBC実装を [`Mbc`] にまとめ、ROM/RAMバンクの読み書きと時間依存機能を
-//! カートリッジ層から同じインターフェースで扱えるようにします。バンク番号が
-//! 実データの範囲を超えた場合のラップ処理も、このモジュールの共有ヘルパーで
-//! 一貫させています。
+//! Mbc presents ROM/RAM banking and time-dependent cartridge features through
+//! a common interface. Shared helpers keep out-of-range bank wrapping
+//! consistent across controller implementations.
 
 pub mod camera;
 pub mod huc1;
@@ -33,6 +32,9 @@ pub use tama5::Tama5;
 
 use serde::{Deserialize, Serialize};
 
+// Wrap the bank selector across ceil(length / bank_size) banks, then
+// read the supplied byte offset with saturating index arithmetic. Empty
+// storage, zero bank size or a missing byte returns FF; offset is not masked.
 pub(crate) fn read_rom_bank(rom: &[u8], bank: usize, bank_size: usize, offset: usize) -> u8 {
     if rom.is_empty() || bank_size == 0 {
         return 0xFF;
@@ -44,6 +46,8 @@ pub(crate) fn read_rom_bank(rom: &[u8], bank: usize, bank_size: usize, offset: u
         .unwrap_or(0xFF)
 }
 
+// Read a wrapped RAM bank and caller-supplied offset. A partial final
+// bank is counted, but absent bytes still return FF rather than wrapping.
 pub(crate) fn read_ram_bank(ram: &[u8], bank: usize, bank_size: usize, offset: usize) -> u8 {
     if ram.is_empty() || bank_size == 0 {
         return 0xFF;
@@ -55,6 +59,8 @@ pub(crate) fn read_ram_bank(ram: &[u8], bank: usize, bank_size: usize, offset: u
         .unwrap_or(0xFF)
 }
 
+// Wrap the RAM bank selector and write only if the resulting byte exists.
+// Empty storage, zero bank size and out-of-storage offsets leave RAM unchanged.
 pub(crate) fn write_ram_bank(
     ram: &mut [u8],
     bank: usize,
@@ -77,6 +83,8 @@ mod tests {
     use super::{read_ram_bank, read_rom_bank, write_ram_bank};
 
     #[test]
+    // Check four bank selectors against a synthetic two-bank ROM, proving
+    // selector wrapping at offset zero for complete banks.
     fn rom_bank_reads_wrap_when_bank_exceeds_rom_size() {
         let mut rom = vec![0u8; 0x8000];
         rom[0x0000] = 0x12;
@@ -88,6 +96,8 @@ mod tests {
     }
 
     #[test]
+    // Write through an oversized bank selector and read the corresponding
+    // wrapped RAM location; partial banks and invalid offsets are outside this test.
     fn ram_bank_reads_and_writes_wrap_when_bank_exceeds_ram_size() {
         let mut ram = vec![0u8; 0x4000];
         write_ram_bank(&mut ram, 3, 0x2000, 0x0010, 0xAB);
@@ -112,6 +122,9 @@ pub enum Mbc {
 }
 
 impl Mbc {
+    // Summarize the selected controller RAM gate, including camera/IR modes
+    // and the two MBC7 enable latches. This reports control state, not RAM capacity
+    // or proof that a particular cartridge address is backed by RAM.
     pub fn ram_access_enabled(&self) -> bool {
         match self {
             Self::RomOnly(_) => true,
@@ -129,6 +142,8 @@ impl Mbc {
         }
     }
 
+    // Delegate the controller bank label used by diagnostics. It may describe
+    // a selector before storage-size wrapping rather than a unique physical bank.
     pub fn current_rom_bank(&self) -> u16 {
         match self {
             Self::RomOnly(m) => m.current_rom_bank(),
@@ -146,6 +161,8 @@ impl Mbc {
         }
     }
 
+    // Delegate the controller RAM-bank label; special controllers can use
+    // the same address window for device registers.
     pub fn current_ram_bank(&self) -> u16 {
         match self {
             Self::RomOnly(m) => m.current_ram_bank(),
@@ -163,6 +180,7 @@ impl Mbc {
         }
     }
 
+    // Dispatch a ROM-window read to the active controller and its mapping rules.
     pub fn read_rom(&self, rom: &[u8], addr: u16) -> u8 {
         match self {
             Self::RomOnly(m) => m.read_rom(rom, addr),
@@ -180,6 +198,7 @@ impl Mbc {
         }
     }
 
+    // Dispatch an external-memory/device-window read to the active controller.
     pub fn read_ram(&self, ram: &[u8], addr: u16) -> u8 {
         match self {
             Self::RomOnly(m) => m.read_ram(ram, addr),
@@ -197,6 +216,7 @@ impl Mbc {
         }
     }
 
+    // Dispatch an external-memory/device-window write with mutable RAM backing.
     pub fn write_ram(&mut self, ram: &mut [u8], addr: u16, value: u8) {
         match self {
             Self::RomOnly(m) => m.write_ram(ram, addr, value),
@@ -214,6 +234,7 @@ impl Mbc {
         }
     }
 
+    // Route a cartridge control-register write to the active controller.
     pub fn write(&mut self, addr: u16, value: u8) {
         match self {
             Self::RomOnly(m) => m.write(addr, value),
@@ -231,6 +252,8 @@ impl Mbc {
         }
     }
 
+    // Advance only controllers with modeled time-dependent features. ROM-only,
+    // MBC1, MBC2, MMM01, MBC5 and HuC1 have no per-cycle work in this dispatch.
     pub fn tick(&mut self, cycles: u32) {
         match self {
             Self::RomOnly(_) => {}

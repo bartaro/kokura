@@ -1,8 +1,8 @@
-//! C ABI の公開エントリポイント。
+//! Public C ABI entry points.
 //!
-//! Rustの所有権をそのままCへ漏らさず、opaque handle、明示的な解放関数、
-//! UTF-8文字列の所有権移譲、固定レイアウトのFFI型を通してC/Python側へ
-//! `kokura-core` と `kokura-debug` の機能を提供します。
+//! Expose core and debug functionality through opaque handles, explicit release
+//! functions, owned UTF-8 strings and fixed-layout FFI types, keeping Rust
+//! ownership details behind the ABI boundary.
 
 pub mod bridge;
 pub mod core;

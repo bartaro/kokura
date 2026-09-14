@@ -9,6 +9,7 @@ pub struct Mbc2 {
 }
 
 impl Default for Mbc2 {
+    // Start at ROM bank one with the internal nibble RAM disabled.
     fn default() -> Self {
         Self {
             rom_bank: 1,
@@ -20,6 +21,7 @@ impl Default for Mbc2 {
 impl Mbc2 {
     pub const RAM_LEN: usize = 0x0200;
 
+    // Mask the four-bit ROM selector and remap zero to bank one.
     pub fn current_rom_bank(&self) -> u16 {
         let bank = self.rom_bank & 0x0F;
         if bank == 0 {
@@ -29,14 +31,18 @@ impl Mbc2 {
         }
     }
 
+    // Report bank zero for the unbanked 512-entry nibble memory.
     pub fn current_ram_bank(&self) -> u16 {
         0
     }
 
+    // Expose the RAM-enable latch to shared controller dispatch.
     pub fn ram_enabled(&self) -> bool {
         self.ram_enabled
     }
 
+    // Read lower ROM directly and upper ROM through a wrapped 16 KiB bank;
+    // return FF outside the two cartridge ROM windows.
     pub fn read_rom(&self, rom: &[u8], addr: u16) -> u8 {
         match addr {
             0x0000..=0x3FFF => rom.get(addr as usize).copied().unwrap_or(0xFF),
@@ -48,6 +54,8 @@ impl Mbc2 {
         }
     }
 
+    // Within 0000-3FFF, address bit eight selects ROM-bank control when set
+    // or RAM-enable control when clear. Ignore writes outside that control range.
     pub fn write(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x3FFF if addr & 0x0100 == 0 => {
@@ -61,6 +69,8 @@ impl Mbc2 {
         }
     }
 
+    // For enabled RAM, mirror by the low nine address bits and force the
+    // returned high nibble to F. Missing backing or disabled RAM reads as FF.
     pub fn read_ram(&self, ram: &[u8], addr: u16) -> u8 {
         if !self.ram_enabled {
             return 0xFF;
@@ -69,6 +79,8 @@ impl Mbc2 {
         0xF0 | ram.get(index).copied().unwrap_or(0x0F)
     }
 
+    // For enabled RAM, mirror to one of 512 entries and store only the
+    // low nibble if backing exists. Upper address bits do not select another bank.
     pub fn write_ram(&self, ram: &mut [u8], addr: u16, value: u8) {
         if !self.ram_enabled {
             return;

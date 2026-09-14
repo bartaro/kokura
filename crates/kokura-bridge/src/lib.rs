@@ -1,7 +1,7 @@
-//! KITAQGB が出力するデバッグ副ファイルとKOKURAを接続する層。
+//! Connect KITAQGB debug sidecar files to KOKURA.
 //!
-//! map/source-mapの解析、シンボルとソース位置の保持、KITAQGB intrinsicの
-//! 分類、バンク切替の説明、ROMの逆アセンブル補助を提供します。
+//! Parse map/source-map data, retain symbols and source locations, classify
+//! compiler intrinsics, explain bank changes and support ROM disassembly.
 
 pub mod banktrace;
 pub mod decompile;

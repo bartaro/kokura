@@ -2,7 +2,11 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
+// Serializable debug-report schema using the variant name as the type tag.
+// Events carry frame/cycle context; variants named Suspected or Risk express
+// diagnostic inference. Declaring a variant does not imply every run emits it.
 pub enum DebugEvent {
+    // PPU timing and scanline observations.
     ScanlineAdvance {
         frame: u64,
         cycle: u64,
@@ -21,6 +25,7 @@ pub enum DebugEvent {
         cycle: u64,
         ly: u8,
     },
+    // DMA requests, completion, modeled stalls and deferred/ignored operations.
     OamDmaStart {
         frame: u64,
         cycle: u64,
@@ -84,6 +89,7 @@ pub enum DebugEvent {
         value: u8,
         remaining_blocks: u8,
     },
+    // Mapper register writes and observed effective bank transitions.
     MapperControlWrite {
         frame: u64,
         cycle: u64,
@@ -111,6 +117,7 @@ pub enum DebugEvent {
         from: u16,
         to: u16,
     },
+    // Audio control, channel evolution, output buffering and access diagnostics.
     ApuMasterToggle {
         frame: u64,
         cycle: u64,
@@ -221,6 +228,7 @@ pub enum DebugEvent {
         shift: u8,
         divisor_code: u8,
     },
+    // Color hardware mode, memory-bank selection, palettes and CPU-speed changes.
     CgbModeSelected {
         frame: u64,
         cycle: u64,
@@ -286,6 +294,7 @@ pub enum DebugEvent {
         cpu_cycles: u32,
         ppu_mode: u8,
     },
+    // LCD register changes, status signals and frame completion.
     LcdToggle {
         frame: u64,
         cycle: u64,
@@ -322,6 +331,7 @@ pub enum DebugEvent {
         cycle: u64,
         frame_hash: u32,
     },
+// Execution-bank context and symbol-based call/intrinsic diagnostics.
     BankSwitch {
         frame: u64,
         cycle: u64,
@@ -352,6 +362,7 @@ pub enum DebugEvent {
         expected_bank: u16,
         current_bank: u16,
     },
+    // Timer overflow/reload and control-register observations.
     TimerInterrupt {
         frame: u64,
         cycle: u64,
@@ -380,6 +391,7 @@ pub enum DebugEvent {
         cycle: u64,
         old_div: u16,
     },
+    // Serial-transfer boundaries and controller-input activity.
     SerialTransferStart {
         frame: u64,
         cycle: u64,
@@ -419,6 +431,7 @@ pub enum DebugEvent {
         cycle: u64,
         p1: u8,
     },
+    // Interrupt request/service decisions, including blocked pending sources.
     InterruptRequested {
         frame: u64,
         cycle: u64,
@@ -438,6 +451,7 @@ pub enum DebugEvent {
         ime: bool,
         halted: bool,
     },
+    // Execution termination and source/symbol context for debugging.
     ExecutionStop {
         frame: u64,
         cycle: u64,
@@ -466,6 +480,7 @@ pub enum DebugEvent {
         symbol: Option<String>,
         source: Option<String>,
     },
+    // Replay checkpoint identity, rewind outcomes and digest divergence.
     ReplayCheckpointSaved {
         frame: u64,
         cycle: u64,
@@ -493,6 +508,7 @@ pub enum DebugEvent {
         expected_digest: u64,
         actual_digest: u64,
     },
+    // Heuristic bank-alternation score; this event is not proof of a program bug.
     BankThrashSuspected {
         frame: u64,
         cycle: u64,

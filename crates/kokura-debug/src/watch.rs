@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+// Let serde omit optional false-valued preview flags from reports.
 fn is_false(value: &bool) -> bool {
     !*value
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+// Select initial, previous-frame or separately named comparison data.
 pub enum MemoryWatchBaselineMode {
     #[default]
     Initial,
@@ -21,6 +23,8 @@ pub struct MemoryWatchSpec {
 }
 
 impl MemoryWatchSpec {
+    // Trim the required name and reject zero size or an end beyond 10000.
+    // An end exactly at 10000 is valid; actual reads and comparisons occur elsewhere.
     pub fn validate(self) -> Result<Self, String> {
         let name = self.name.trim();
         if name.is_empty() {
@@ -59,6 +63,9 @@ pub struct MemoryWatchInsight {
 }
 
 #[derive(Debug, Clone, Serialize)]
+// Carry range statistics and optional bounded byte/difference previews.
+// Truncation flags distinguish previews from complete watched data; insights
+// are descriptive report payloads rather than additional memory reads.
 pub struct MemoryWatchResult {
     pub name: String,
     pub addr: u16,
@@ -87,6 +94,7 @@ mod tests {
     use super::{MemoryWatchBaselineMode, MemoryWatchSpec};
 
     #[test]
+    // Reject a watch name containing only whitespace.
     fn memory_watch_validation_rejects_empty_name() {
         let err = MemoryWatchSpec {
             name: "   ".to_string(),
@@ -99,6 +107,7 @@ mod tests {
     }
 
     #[test]
+    // Reject an empty watched range.
     fn memory_watch_validation_rejects_zero_size() {
         let err = MemoryWatchSpec {
             name: "WRAM".to_string(),
@@ -111,6 +120,7 @@ mod tests {
     }
 
     #[test]
+    // Reject a range extending beyond the 16-bit address space.
     fn memory_watch_validation_rejects_overflow() {
         let err = MemoryWatchSpec {
             name: "Tail".to_string(),
@@ -123,6 +133,7 @@ mod tests {
     }
 
     #[test]
+    // Check that validation trims the label and preserves a valid address/size.
     fn memory_watch_validation_accepts_valid_window() {
         let spec = MemoryWatchSpec {
             name: " WRAM ".to_string(),
@@ -137,6 +148,7 @@ mod tests {
     }
 
     #[test]
+    // Keep the default comparison policy anchored to the initial observation.
     fn baseline_mode_defaults_to_initial() {
         assert_eq!(
             MemoryWatchBaselineMode::default(),

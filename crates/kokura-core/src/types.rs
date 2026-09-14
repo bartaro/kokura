@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+// Select monochrome or color hardware behavior, defaulting to monochrome.
 pub enum HardwareMode {
     #[default]
     Dmg,
@@ -24,6 +25,7 @@ pub enum MapperKind {
 }
 
 impl MapperKind {
+    // Return a stable diagnostic label for the selected cartridge mapper kind.
     pub fn name(self) -> &'static str {
         match self {
             Self::RomOnly => "ROM_ONLY",
@@ -41,6 +43,8 @@ impl MapperKind {
         }
     }
 
+    // Classify the explicitly listed uncommon mapper kinds for special
+    // handling; this flag alone does not describe compatibility or completeness.
     pub fn is_special(self) -> bool {
         matches!(
             self,
@@ -56,6 +60,8 @@ impl MapperKind {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+// Retain total CPU cycles, frame count and the current PPU-cycle phase.
+// Deserialization supplies zero when the phase field is absent.
 pub struct ClockState {
     pub cycles: u64,
     pub frames: u64,
@@ -64,6 +70,7 @@ pub struct ClockState {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Carry core PPU observations; the debug layer supplies reporting context.
 pub enum PpuTraceEvent {
     ScanlineAdvance { from_ly: u8, to_ly: u8 },
     PpuModeChange { from_mode: u8, to_mode: u8, ly: u8 },
@@ -74,11 +81,13 @@ pub enum PpuTraceEvent {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Describe why a pending HBlank transfer was deferred by the core.
 pub enum HdmaDeferredReason {
     CpuHalted,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Record DMA lifecycle, block progress and modeled stall information.
 pub enum DmaTraceEvent {
     OamDmaStart {
         source: u16,
@@ -128,6 +137,7 @@ pub enum DmaTraceEvent {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Retain the triggering register write and resulting bank observations.
 pub enum MapperTraceEvent {
     ControlWrite {
         mapper: MapperKind,
@@ -153,6 +163,7 @@ pub enum MapperTraceEvent {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Name the five interrupt sources represented by the hardware model.
 pub enum InterruptSource {
     Vblank,
     LcdStat,
@@ -162,6 +173,7 @@ pub enum InterruptSource {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Report timer control edges, overflow and delayed reload observations.
 pub enum TimerTraceEvent {
     DivResetEdge { old_div: u16 },
     TacWrite { old_tac: u8, new_tac: u8 },
@@ -170,6 +182,7 @@ pub enum TimerTraceEvent {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Record serial-transfer endpoints with their clock-source setting.
 pub enum SerialTraceEvent {
     TransferStart {
         sb: u8,
@@ -184,6 +197,7 @@ pub enum SerialTraceEvent {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Separate input changes, register selection/read activity and IRQ edges.
 pub enum JoypadTraceEvent {
     Read { p1: u8, select: u8, mask: u8 },
     SelectionWrite { old_p1: u8, new_p1: u8 },
@@ -192,6 +206,8 @@ pub enum JoypadTraceEvent {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Carry audio register/channel observations, modeled risks and PCM-buffer
+// activity. A risk event is a diagnostic hint, not proof of an audible defect.
 pub enum ApuTraceEvent {
     MasterToggle {
         enabled: bool,
@@ -272,6 +288,8 @@ pub enum ApuTraceEvent {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Describe color-mode bank, palette and CPU-speed operations, including
+// blocked palette writes and speed-switch stalls.
 pub enum CgbTraceEvent {
     ModeSelected {
         cgb_enabled: bool,
@@ -321,6 +339,7 @@ pub enum CgbTraceEvent {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Group timer, serial and joypad observations in one core I/O trace stream.
 pub enum IoTraceEvent {
     Timer(TimerTraceEvent),
     Serial(SerialTraceEvent),
@@ -328,6 +347,7 @@ pub enum IoTraceEvent {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Distinguish interrupt requests, actual service and pending blocked IRQs.
 pub enum InterruptTraceEvent {
     Requested {
         source: InterruptSource,
@@ -345,6 +365,8 @@ pub enum InterruptTraceEvent {
 }
 
 #[derive(Debug, Clone)]
+// Return the elapsed cycles, frame-completion flag and categorized events
+// collected by one machine step; consumers decide which events to report.
 pub struct StepResult {
     pub cycles: u32,
     pub frame_completed: bool,

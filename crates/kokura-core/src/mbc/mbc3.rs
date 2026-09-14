@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::mbc::{read_ram_bank, read_rom_bank, write_ram_bank};
 
+// Read whole host-wall-clock seconds since the Unix epoch, falling
+// back to zero if the system time precedes it.
 fn unix_now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -23,6 +25,8 @@ pub struct Mbc3 {
 }
 
 impl Default for Mbc3 {
+    // Select ROM one/RAM zero, disable RAM and zero live/latched RTC
+    // registers while recording the current host timestamp.
     fn default() -> Self {
         let now = unix_now_secs();
         Self {
@@ -38,15 +42,20 @@ impl Default for Mbc3 {
 }
 
 impl Mbc3 {
+    // Return the stored ROM selector, mapping zero to one. Normal writes
+    // mask it to seven bits before it reaches this accessor.
     pub fn current_rom_bank(&self) -> u16 {
         let bank = if self.rom_bank == 0 { 1 } else { self.rom_bank };
         bank as u16
     }
 
+    // Expose the selector low two bits as a RAM-bank label even when
+    // the full selector currently names an RTC register.
     pub fn current_ram_bank(&self) -> u16 {
         (self.ram_bank & 0x03) as u16
     }
 
+    // Read fixed lower ROM and wrapped selected upper ROM in 16 KiB banks.
     pub fn read_rom(&self, rom: &[u8], addr: u16) -> u8 {
         match addr {
             0x0000..=0x3FFF => rom.get(addr as usize).copied().unwrap_or(0xFF),
@@ -58,6 +67,8 @@ impl Mbc3 {
         }
     }
 
+    // When enabled, selectors 08-0C read latched RTC registers. Other
+    // selectors read RAM using their low two bits; this read does not update time.
     pub fn read_ram(&self, ram: &[u8], addr: u16) -> u8 {
         if !self.ram_enabled {
             return 0xFF;
@@ -71,6 +82,8 @@ impl Mbc3 {
         }
     }
 
+    // When enabled, synchronize live RTC time, then write a selected RTC
+    // register or wrapped RAM byte. RTC writes also update that latched register.
     pub fn write_ram(&mut self, ram: &mut [u8], addr: u16, value: u8) {
         if !self.ram_enabled {
             return;
@@ -85,6 +98,9 @@ impl Mbc3 {
         }
     }
 
+    // Synchronize RTC and decode RAM/RTC enable, ROM selection and the full
+    // RAM/RTC selector. Only an exact latch-value transition from zero to one
+    // copies every live RTC register to its readout snapshot.
     pub fn write(&mut self, addr: u16, value: u8) {
         self.update_rtc();
         match addr {
@@ -104,10 +120,14 @@ impl Mbc3 {
         }
     }
 
+    // Update from host time regardless of the supplied emulation cycle count.
     pub fn tick(&mut self, _cycles: u32) {
         self.update_rtc();
     }
 
+    // Ignore non-increasing host timestamps. Otherwise consume elapsed
+    // seconds and update the timestamp even while halted, so halted time is
+    // not later added when the RTC resumes.
     fn update_rtc(&mut self) {
         let now = unix_now_secs();
         if now <= self.rtc_last_timestamp_secs {
@@ -124,6 +144,9 @@ impl Mbc3 {
         self.advance_rtc_seconds(elapsed);
     }
 
+    // Carry elapsed seconds through minutes/hours into a nine-bit day
+    // count. Wrap days and set sticky carry on overflow while retaining other
+    // control bits; the latched readout is not refreshed here.
     fn advance_rtc_seconds(&mut self, elapsed_seconds: u64) {
         if elapsed_seconds == 0 {
             return;
@@ -153,6 +176,9 @@ impl Mbc3 {
         }
     }
 
+    // Normalize second/minute/hour writes and update day/control fields,
+    // then mirror the changed live byte into its latched slot. Callers must
+    // supply index 0-4; the final slot copy is not bounds-guarded.
     fn write_rtc_register(&mut self, index: u8, value: u8) {
         let slot = index as usize;
         match index {
@@ -174,6 +200,8 @@ mod tests {
     use super::*;
 
     #[test]
+    // Check a zero-to-one latch sequence against supplied live RTC values.
+    // The fixture uses the host clock, so elapsed seconds can affect this test.
     fn latch_edge_copies_live_rtc_registers() {
         let mut mbc = Mbc3::default();
         mbc.ram_enabled = true;
@@ -190,6 +218,8 @@ mod tests {
     }
 
     #[test]
+    // Place the RTC at day 511 just before rollover and advance from a
+    // host timestamp one second earlier; check wrapped fields and sticky carry.
     fn rtc_advances_and_sets_carry_on_day_overflow() {
         let mut mbc = Mbc3::default();
         mbc.rtc_registers = [59, 59, 23, 0xFF, 0x01];

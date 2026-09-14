@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::mbc::read_rom_bank;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+// Track whether incoming edges collect a command/data word or emit
+// a read word; transaction boundaries reset this state.
 enum EepromCommandMode {
     Idle,
     CollectingCommand,
@@ -20,6 +22,7 @@ pub struct Mbc7 {
     pub accel_x: u16,
     pub accel_y: u16,
     pub eeprom_io: u8,
+    // Store 128 big-endian words separately from the cartridge RAM slice.
     pub eeprom: Vec<u8>,
     pub eeprom_write_enabled: bool,
     eeprom_command_mode: EepromCommandMode,
@@ -32,6 +35,9 @@ pub struct Mbc7 {
 }
 
 impl Default for Mbc7 {
+    // Select ROM one, close both register gates, initialize centered
+    // accelerometer values and erased 256-byte EEPROM, and reset serial
+    // command state with writes disabled and data-out high.
     fn default() -> Self {
         Self {
             rom_bank: 1,
@@ -55,14 +61,17 @@ impl Default for Mbc7 {
 }
 
 impl Mbc7 {
+    // Require both cartridge register-access enable latches.
     fn ram_enabled(&self) -> bool {
         self.ram_enable_1 && self.ram_enable_2
     }
 
+    // Read the EEPROM serial output bit retained in the I/O latch.
     fn data_out(&self) -> bool {
         self.eeprom_io & 0x01 != 0
     }
 
+    // Change only the serial output bit, preserving stored CS/clock/input bits.
     fn set_data_out(&mut self, high: bool) {
         if high {
             self.eeprom_io |= 0x01;
@@ -71,14 +80,19 @@ impl Mbc7 {
         }
     }
 
+    // Report the stored ROM selector, including zero; normal writes mask
+    // it to seven bits.
     pub fn current_rom_bank(&self) -> u16 {
         self.rom_bank as u16
     }
 
+    // Return bank zero for the device-register window; EEPROM has its
+    // own word addresses rather than cartridge RAM banking.
     pub fn current_ram_bank(&self) -> u16 {
         0
     }
 
+    // Read fixed lower ROM or the selected wrapped 16 KiB upper bank.
     pub fn read_rom(&self, rom: &[u8], addr: u16) -> u8 {
         match addr {
             0x0000..=0x3FFF => rom.get(addr as usize).copied().unwrap_or(0xFF),
@@ -90,6 +104,9 @@ impl Mbc7 {
         }
     }
 
+    // With both gates open, decode address bits 4-7 into accelerometer
+    // bytes, constants or EEPROM pins. Supplied external RAM is unused and
+    // other address bits mirror the register selection.
     pub fn read_ram(&self, _ram: &[u8], addr: u16) -> u8 {
         if !self.ram_enabled() {
             return 0xFF;
@@ -106,6 +123,9 @@ impl Mbc7 {
         }
     }
 
+    // With both gates open, process the 55/AA accelerometer reset/latch
+    // sequence or clock EEPROM pins. The latched acceleration is the fixed
+    // 81D0 value on both axes, not live host-sensor input.
     pub fn write_ram(&mut self, _ram: &mut [u8], addr: u16, value: u8) {
         if !self.ram_enabled() {
             return;
@@ -130,6 +150,8 @@ impl Mbc7 {
         }
     }
 
+    // Decode the first enable key, seven-bit ROM selection and the second
+    // enable key, which requires the exact byte 40.
     pub fn write(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x1FFF => self.ram_enable_1 = (value & 0x0F) == 0x0A,
@@ -139,8 +161,13 @@ impl Mbc7 {
         }
     }
 
+    // Do no cycle-based work; EEPROM changes follow pin writes and complete
+    // without a modeled busy delay.
     pub fn tick(&mut self, _cycles: u32) {}
 
+    // Detect chip-select transitions and selected rising clock edges,
+    // then store input pins while preserving the output produced by processing.
+    // A simultaneous CS rise and clock rise starts and clocks the transaction.
     fn clock_eeprom(&mut self, value: u8) {
         let next_io = value & 0xC2;
         let old_cs = self.eeprom_io & 0x80 != 0;
@@ -164,6 +191,8 @@ impl Mbc7 {
         self.eeprom_io = next_io | u8::from(self.data_out());
     }
 
+    // Reset command/shift progress and raise data-out while retaining
+    // EEPROM contents and the write-enable latch.
     fn begin_transaction(&mut self) {
         self.eeprom_command_started = false;
         self.eeprom_command_mode = EepromCommandMode::Idle;
@@ -173,6 +202,8 @@ impl Mbc7 {
         self.set_data_out(true);
     }
 
+    // Discard partial command/data progress on CS falling and raise
+    // data-out, retaining completed writes and write-enable state.
     fn end_transaction(&mut self) {
         self.eeprom_command_started = false;
         self.eeprom_command_mode = EepromCommandMode::Idle;
@@ -182,6 +213,9 @@ impl Mbc7 {
         self.set_data_out(true);
     }
 
+    // Wait for a start bit, collect ten command bits, then shift one word
+    // out or collect sixteen data bits for write/write-all. Reads stop after
+    // one word; writes honor the enable latch and finish immediately.
     fn on_rising_clock(&mut self, di: bool) {
         match self.eeprom_command_mode {
             EepromCommandMode::Idle => {
@@ -237,11 +271,16 @@ impl Mbc7 {
         }
     }
 
+    // Shift the next input bit into the command/data accumulator and
+    // saturate the collected-bit counter.
     fn push_bit(&mut self, high: bool) {
         self.eeprom_shift_register = (self.eeprom_shift_register << 1) | u32::from(high);
         self.eeprom_bits_collected = self.eeprom_bits_collected.saturating_add(1);
     }
 
+    // Decode read/write/erase or global write-enable/erase-all/write-all
+    // commands, clearing input progress first. Word addresses use seven bits.
+    // Enable/disable commands retain CollectingCommand until CS resets it.
     fn decode_command(&mut self) {
         let bits = self.eeprom_shift_register as u16 & 0x03FF;
         let opcode = (bits >> 8) & 0x03;
@@ -286,6 +325,7 @@ impl Mbc7 {
         }
     }
 
+    // Combine two big-endian EEPROM bytes; missing bytes read as FF.
     fn read_word(&self, address: u8) -> u16 {
         let index = usize::from(address) * 2;
         let hi = self.eeprom.get(index).copied().unwrap_or(0xFF);
@@ -293,6 +333,8 @@ impl Mbc7 {
         u16::from_be_bytes([hi, lo])
     }
 
+    // Store a big-endian word into existing backing bytes. Enable checks
+    // are the caller's responsibility; this helper only bounds-checks storage.
     fn write_word(&mut self, address: u8, value: u16) {
         let index = usize::from(address) * 2;
         let [hi, lo] = value.to_be_bytes();
@@ -309,6 +351,7 @@ impl Mbc7 {
 mod tests {
     use super::*;
 
+    // Keep CS asserted while writing a low then high clock with one input bit.
     fn pulse(mbc7: &mut Mbc7, di: bool) {
         let low = 0x80 | if di { 0x02 } else { 0x00 };
         let high = low | 0x40;
@@ -316,15 +359,19 @@ mod tests {
         mbc7.write_ram(&mut [], 0xA080, high);
     }
 
+    // Drop then assert CS to start a fresh component-test transaction.
     fn begin(mbc7: &mut Mbc7) {
         mbc7.write_ram(&mut [], 0xA080, 0x00);
         mbc7.write_ram(&mut [], 0xA080, 0x80);
     }
 
+    // Drop CS to end a component-test transaction and reset partial progress.
     fn end(mbc7: &mut Mbc7) {
         mbc7.write_ram(&mut [], 0xA080, 0x00);
     }
 
+    // Start a transaction, send the leading one bit, then transmit the
+    // provided command bits without imposing a command-length check here.
     fn send_start_and_command(mbc7: &mut Mbc7, command_bits: &[u8]) {
         begin(mbc7);
         pulse(mbc7, true);
@@ -334,6 +381,9 @@ mod tests {
     }
 
     #[test]
+    // Enable writes, transmit word 1234 to address one, then read sixteen
+    // output bits back. This covers one normal word path, not all commands,
+    // busy timing, sensor behavior or persistence across machine reloads.
     fn eeprom_write_and_read_round_trip() {
         let mut mbc7 = Mbc7::default();
         mbc7.ram_enable_1 = true;

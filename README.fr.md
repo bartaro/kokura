@@ -2,7 +2,7 @@
 
 [English](README.md#english) | [日本語](README.md#japanese) | **Français**
 
-**[Ouvrir le manuel de KOKURA en français](https://bartaro.github.io/kitaq-docs/fr/kokura.html)**
+**Ouvrir le manuel de KOKURA en français**
 
 Émulateur GB/GBC avec interface en ligne de commande, traces, débogage et interfaces Python/C.
 
@@ -31,7 +31,7 @@ Pour recompiler, utilisez une version stable actuelle de Rust. Sous Windows, ins
 
 ## Manuels et licences
 
-- [Manuel en français](https://bartaro.github.io/kitaq-docs/fr/kokura.html)
+- Manuel en français
 - [Manuel en anglais](https://bartaro.github.io/kitaq-docs/en/kokura.html) / [Manuel en japonais](https://bartaro.github.io/kitaq-docs/kokura.html)
 - [Sources du manuel pour lecture hors connexion](https://github.com/bartaro/kitaq-docs)
 - [Licence](LICENSE) / [Traduction japonaise à titre de référence](LICENSE.ja)

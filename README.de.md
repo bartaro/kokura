@@ -2,7 +2,7 @@
 
 [English](README.md#english) | [日本語](README.md#japanese) | **Deutsch**
 
-**[Deutsches Handbuch zu KOKURA öffnen](https://bartaro.github.io/kitaq-docs/de/kokura.html)**
+**Deutsches Handbuch zu KOKURA öffnen**
 
 GB/GBC-Emulator mit Kommandozeile, Ablaufprotokollen, Debugger und Python-/C-Schnittstellen.
 
@@ -31,7 +31,7 @@ Verwenden Sie eine aktuelle stabile Rust-Toolchain. Installieren Sie unter Windo
 
 ## Handbücher und Lizenzen
 
-- [Deutsches Handbuch](https://bartaro.github.io/kitaq-docs/de/kokura.html)
+- Deutsches Handbuch
 - [Englisches Handbuch](https://bartaro.github.io/kitaq-docs/en/kokura.html) / [Japanisches Handbuch](https://bartaro.github.io/kitaq-docs/kokura.html)
 - [Handbuchquellen zum Offline-Lesen](https://github.com/bartaro/kitaq-docs)
 - [Lizenz](LICENSE) / [Japanische Übersetzung zur Orientierung](LICENSE.ja)

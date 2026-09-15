@@ -2,7 +2,7 @@
 
 [English](README.md#english) | [日本語](README.md#japanese) | **한국어**
 
-**[KOKURA 한국어 설명서 열기](https://bartaro.github.io/kitaq-docs/ko/kokura.html)**
+**KOKURA 한국어 설명서 열기**
 
 명령줄 실행, 트레이스, 디버깅, Python/C 인터페이스를 제공하는 GB/GBC 에뮬레이터입니다.
 
@@ -31,7 +31,7 @@
 
 ## 설명서와 라이선스
 
-- [한국어 설명서](https://bartaro.github.io/kitaq-docs/ko/kokura.html)
+- 한국어 설명서
 - [영어 설명서](https://bartaro.github.io/kitaq-docs/en/kokura.html) / [일본어 설명서](https://bartaro.github.io/kitaq-docs/kokura.html)
 - [오프라인 열람용 설명서 소스](https://github.com/bartaro/kitaq-docs)
 - [라이선스](LICENSE) / [일본어 참고 번역](LICENSE.ja)

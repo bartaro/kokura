@@ -2,7 +2,7 @@
 
 [English](README.md#english) | [日本語](README.md#japanese) | **简体中文**
 
-**[打开KOKURA简体中文手册](https://bartaro.github.io/kitaq-docs/zh-CN/kokura.html)**
+**打开KOKURA简体中文手册**
 
 GB/GBC模拟器，提供命令行操作、执行跟踪、调试及Python/C接口。
 
@@ -31,7 +31,7 @@ GB/GBC模拟器，提供命令行操作、执行跟踪、调试及Python/C接口
 
 ## 手册与许可证
 
-- [简体中文手册](https://bartaro.github.io/kitaq-docs/zh-CN/kokura.html)
+- 简体中文手册
 - [英文手册](https://bartaro.github.io/kitaq-docs/en/kokura.html) / [日文手册](https://bartaro.github.io/kitaq-docs/kokura.html)
 - [供离线阅读的手册源码](https://github.com/bartaro/kitaq-docs)
 - [许可证](LICENSE) / [日文参考译文](LICENSE.ja)

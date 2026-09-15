@@ -2,7 +2,7 @@
 
 [English](README.md#english) | [日本語](README.md#japanese) | **繁體中文**
 
-**[開啟 KOKURA 繁體中文手冊](https://bartaro.github.io/kitaq-docs/zh-TW/kokura.html)**
+**開啟 KOKURA 繁體中文手冊**
 
 Game Boy／Game Boy Color 模擬器，提供命令列操作、執行追蹤、除錯，以及 Python／C 介面。
 
@@ -31,7 +31,7 @@ Game Boy／Game Boy Color 模擬器，提供命令列操作、執行追蹤、除
 
 ## 手冊與授權
 
-- [繁體中文手冊](https://bartaro.github.io/kitaq-docs/zh-TW/kokura.html)
+- 繁體中文手冊
 - [英文手冊](https://bartaro.github.io/kitaq-docs/en/kokura.html)／[日文手冊](https://bartaro.github.io/kitaq-docs/kokura.html)
 - [可供離線閱讀的手冊原始檔](https://github.com/bartaro/kitaq-docs)
 - [授權條款](LICENSE)／[日文參考譯文](LICENSE.ja)

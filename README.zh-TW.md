@@ -1,8 +1,10 @@
 # KOKURA
 
-[English](README.md#english) | [日本語](README.md#japanese) | **繁體中文**
+<!-- readme-language-links:start -->
+[English](README.md#english) | [日本語](README.md#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | **繁體中文** | [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md)
+<!-- readme-language-links:end -->
 
-**開啟 KOKURA 繁體中文手冊**
+**[KOKURA · HTML 手冊](https://bartaro.github.io/kitaq-docs/zh-TW/kokura.html)**
 
 Game Boy／Game Boy Color 模擬器，提供命令列操作、執行追蹤、除錯，以及 Python／C 介面。
 
@@ -31,17 +33,9 @@ Game Boy／Game Boy Color 模擬器，提供命令列操作、執行追蹤、除
 
 ## 手冊與授權
 
-- 繁體中文手冊
+- [KOKURA · HTML 手冊](https://bartaro.github.io/kitaq-docs/zh-TW/kokura.html)
 - [英文手冊](https://bartaro.github.io/kitaq-docs/en/kokura.html)／[日文手冊](https://bartaro.github.io/kitaq-docs/kokura.html)
 - [可供離線閱讀的手冊原始檔](https://github.com/bartaro/kitaq-docs)
 - [授權條款](LICENSE)／[日文參考譯文](LICENSE.ja)
 
-本專案的授權不取代第三方對相依套件、標誌或商標訂定的條件。再散布時，請一併保留隨附聲明。
-
-## 本次公開內容
-
-本次提供模擬器核心、命令列工具及整合 API。圖形介面與 PLITA 相依項目預計日後另行公開，不包含在這份原始碼中。
-
-## 圖形介面開發方針
-
-KOKURA-GUI 與 KUROSAKI-GUI 目前尚未公開。未來的圖形介面開發使用 PLITA，不使用 SDL-GUI 或 egui-GUI。本儲存庫持續提供核心、命令列工具及整合 API。
+專案授權不會取代第三方相依元件、標誌或商標的使用條件。重新散布時請保留隨附聲明。

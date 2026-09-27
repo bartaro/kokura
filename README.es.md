@@ -1,8 +1,10 @@
 # KOKURA
 
-[English](README.md#english) | [日本語](README.md#japanese) | **Español**
+<!-- readme-language-links:start -->
+[English](README.md#english) | [日本語](README.md#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | **Español** | [Deutsch](README.de.md)
+<!-- readme-language-links:end -->
 
-**Abrir el manual de KOKURA en español**
+**[KOKURA · Manual HTML](https://bartaro.github.io/kitaq-docs/es/kokura.html)**
 
 Emulador de GB/GBC con interfaz de línea de comandos, trazas de ejecución, depuración e interfaces Python/C.
 
@@ -31,17 +33,9 @@ Para recompilar, utilice una versión estable reciente de Rust. En Windows tambi
 
 ## Manuales y licencias
 
-- Manual en español
+- [KOKURA · Manual HTML](https://bartaro.github.io/kitaq-docs/es/kokura.html)
 - [Manual en inglés](https://bartaro.github.io/kitaq-docs/en/kokura.html) / [Manual en japonés](https://bartaro.github.io/kitaq-docs/kokura.html)
 - [Archivos del manual para consultarlo sin conexión](https://github.com/bartaro/kitaq-docs)
 - [Licencia](LICENSE) / [Traducción japonesa de referencia](LICENSE.ja)
 
-La licencia del proyecto no sustituye las condiciones de terceros sobre dependencias, logotipos o marcas. Conserve los avisos adjuntos al redistribuir el software.
-
-## Contenido de esta publicación
-
-Se publican el núcleo del emulador, la herramienta de línea de comandos y las API de integración. Las interfaces gráficas y la dependencia de PLITA quedan para una publicación posterior y no forman parte de esta copia del código fuente.
-
-## Desarrollo de las interfaces gráficas
-
-KOKURA-GUI y KUROSAKI-GUI todavía no se han publicado. Su desarrollo futuro utilizará PLITA; no se utilizarán SDL-GUI ni egui-GUI. Este repositorio seguirá distribuyendo el núcleo, la herramienta de línea de comandos y las API de integración.
+La licencia del proyecto no sustituye las condiciones de terceros relativas a dependencias, logotipos o marcas. Conserva los avisos adjuntos al redistribuir.

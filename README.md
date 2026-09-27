@@ -5,11 +5,18 @@
 | --- | --- |
 | English | [KOKURA](https://bartaro.github.io/kitaq-docs/en/kokura.html) |
 | 日本語 | [KOKURA](https://bartaro.github.io/kitaq-docs/kokura.html) |
+| 한국어 | [KOKURA](https://bartaro.github.io/kitaq-docs/ko/kokura.html) |
 | 简体中文 | [KOKURA](https://bartaro.github.io/kitaq-docs/zh-CN/kokura.html) |
+| 繁體中文 | [KOKURA](https://bartaro.github.io/kitaq-docs/zh-TW/kokura.html) |
+| Français | [KOKURA](https://bartaro.github.io/kitaq-docs/fr/kokura.html) |
+| Español | [KOKURA](https://bartaro.github.io/kitaq-docs/es/kokura.html) |
+| Deutsch | [KOKURA](https://bartaro.github.io/kitaq-docs/de/kokura.html) |
 <!-- manual-language-links:end -->
 
 
-[English](#english) | [日本語](#japanese) | [简体中文](README.zh-CN.md)
+<!-- readme-language-links:start -->
+**English** | [日本語](README.md#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md)
+<!-- readme-language-links:end -->
 
 <a name="english"></a>
 

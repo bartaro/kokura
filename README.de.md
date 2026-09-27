@@ -1,8 +1,10 @@
 # KOKURA
 
-[English](README.md#english) | [日本語](README.md#japanese) | **Deutsch**
+<!-- readme-language-links:start -->
+[English](README.md#english) | [日本語](README.md#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [Español](README.es.md) | **Deutsch**
+<!-- readme-language-links:end -->
 
-**Deutsches Handbuch zu KOKURA öffnen**
+**[KOKURA · HTML-Handbuch](https://bartaro.github.io/kitaq-docs/de/kokura.html)**
 
 GB/GBC-Emulator mit Kommandozeile, Ablaufprotokollen, Debugger und Python-/C-Schnittstellen.
 
@@ -31,17 +33,9 @@ Verwenden Sie eine aktuelle stabile Rust-Toolchain. Installieren Sie unter Windo
 
 ## Handbücher und Lizenzen
 
-- Deutsches Handbuch
+- [KOKURA · HTML-Handbuch](https://bartaro.github.io/kitaq-docs/de/kokura.html)
 - [Englisches Handbuch](https://bartaro.github.io/kitaq-docs/en/kokura.html) / [Japanisches Handbuch](https://bartaro.github.io/kitaq-docs/kokura.html)
 - [Handbuchquellen zum Offline-Lesen](https://github.com/bartaro/kitaq-docs)
 - [Lizenz](LICENSE) / [Japanische Übersetzung zur Orientierung](LICENSE.ja)
 
-Die Projektlizenz ersetzt keine Bedingungen Dritter für Abhängigkeiten, Logos oder Marken. Bewahren Sie bei einer Weiterverteilung die beiliegenden Hinweise auf.
-
-## Umfang der öffentlichen Ausgabe
-
-Diese Ausgabe enthält den Emulatorkern, das Kommandozeilenprogramm und die Integrations-APIs. Grafische Oberflächen und die PLITA-Abhängigkeit sind für eine spätere Veröffentlichung vorgesehen und fehlen daher in diesem Quellenstand.
-
-## Entwicklung grafischer Oberflächen
-
-KOKURA-GUI und KUROSAKI-GUI sind noch nicht veröffentlicht. Die weitere GUI-Entwicklung verwendet PLITA; SDL-GUI und egui-GUI sind für diese Projekte nicht vorgesehen. Dieses Repository stellt weiterhin den Kern, das Kommandozeilenprogramm und die Integrations-APIs bereit.
+Die Projektlizenz ersetzt keine Bedingungen Dritter für Abhängigkeiten, Logos oder Marken. Behalten Sie bei einer Weitergabe die beigefügten Hinweise bei.

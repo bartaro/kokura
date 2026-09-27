@@ -1,8 +1,10 @@
 # KOKURA
 
-[English](README.md#english) | [日本語](README.md#japanese) | **한국어**
+<!-- readme-language-links:start -->
+[English](README.md#english) | [日本語](README.md#japanese) | **한국어** | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md)
+<!-- readme-language-links:end -->
 
-**KOKURA 한국어 설명서 열기**
+**[KOKURA · HTML 설명서](https://bartaro.github.io/kitaq-docs/ko/kokura.html)**
 
 명령줄 실행, 트레이스, 디버깅, Python/C 인터페이스를 제공하는 GB/GBC 에뮬레이터입니다.
 
@@ -31,17 +33,9 @@
 
 ## 설명서와 라이선스
 
-- 한국어 설명서
+- [KOKURA · HTML 설명서](https://bartaro.github.io/kitaq-docs/ko/kokura.html)
 - [영어 설명서](https://bartaro.github.io/kitaq-docs/en/kokura.html) / [일본어 설명서](https://bartaro.github.io/kitaq-docs/kokura.html)
 - [오프라인 열람용 설명서 소스](https://github.com/bartaro/kitaq-docs)
 - [라이선스](LICENSE) / [일본어 참고 번역](LICENSE.ja)
 
-프로젝트 라이선스가 의존 라이브러리, 로고, 상표에 관한 제3자의 조건을 대신하지는 않습니다. 재배포할 때 동봉된 고지를 유지하세요.
-
-## 공개 패키지의 범위
-
-이번 공개본에는 에뮬레이터 코어, 명령줄 도구, 연동 API가 들어 있습니다. GUI와 PLITA 의존성은 향후 공개 대상으로 남겨 두었으며, 이 소스 공개본에는 포함되지 않습니다.
-
-## GUI 개발 방침
-
-KOKURA-GUI와 KUROSAKI-GUI는 아직 공개하지 않습니다. 향후 GUI 개발에는 PLITA를 사용하며, SDL-GUI와 egui-GUI는 사용하지 않습니다. 이 저장소에서는 코어, 명령줄 도구, 연동 API를 계속 제공합니다.
+프로젝트 라이선스가 외부 의존성, 로고, 상표에 관한 제3자의 조건을 대신하지는 않습니다. 재배포할 때 동봉된 고지를 유지하세요.

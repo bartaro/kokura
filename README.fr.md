@@ -1,8 +1,10 @@
 # KOKURA
 
-[English](README.md#english) | [日本語](README.md#japanese) | **Français**
+<!-- readme-language-links:start -->
+[English](README.md#english) | [日本語](README.md#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | **Français** | [Español](README.es.md) | [Deutsch](README.de.md)
+<!-- readme-language-links:end -->
 
-**Ouvrir le manuel de KOKURA en français**
+**[KOKURA · Manuel HTML](https://bartaro.github.io/kitaq-docs/fr/kokura.html)**
 
 Émulateur GB/GBC avec interface en ligne de commande, traces, débogage et interfaces Python/C.
 
@@ -31,17 +33,9 @@ Pour recompiler, utilisez une version stable actuelle de Rust. Sous Windows, ins
 
 ## Manuels et licences
 
-- Manuel en français
+- [KOKURA · Manuel HTML](https://bartaro.github.io/kitaq-docs/fr/kokura.html)
 - [Manuel en anglais](https://bartaro.github.io/kitaq-docs/en/kokura.html) / [Manuel en japonais](https://bartaro.github.io/kitaq-docs/kokura.html)
 - [Sources du manuel pour lecture hors connexion](https://github.com/bartaro/kitaq-docs)
 - [Licence](LICENSE) / [Traduction japonaise à titre de référence](LICENSE.ja)
 
-La licence du projet ne remplace pas les conditions de tiers relatives aux dépendances, logos ou marques. Conservez les mentions jointes lors de la redistribution.
-
-## Contenu du paquet public
-
-Cette publication contient le cœur de l'émulateur, l'outil en ligne de commande et les API d'intégration. Les interfaces graphiques et la dépendance PLITA sont reportées à une publication ultérieure et ne figurent pas dans cette copie du dépôt.
-
-## Développement des interfaces graphiques
-
-KOKURA-GUI et KUROSAKI-GUI restent non publiés. Leur développement futur utilisera PLITA ; SDL-GUI et egui-GUI ne sont pas prévus pour ces projets. Ce dépôt continue de distribuer le cœur, l'outil en ligne de commande et les API d'intégration.
+La licence du projet ne remplace pas les conditions des tiers relatives aux dépendances, logos ou marques. Conservez les mentions jointes lors de la redistribution.

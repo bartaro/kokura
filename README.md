@@ -5,10 +5,11 @@
 | --- | --- |
 | English | [KOKURA](https://bartaro.github.io/kitaq-docs/en/kokura.html) |
 | 日本語 | [KOKURA](https://bartaro.github.io/kitaq-docs/kokura.html) |
+| 简体中文 | [KOKURA](https://bartaro.github.io/kitaq-docs/zh-CN/kokura.html) |
 <!-- manual-language-links:end -->
 
 
-[English](#english) | [日本語](#japanese)
+[English](#english) | [日本語](#japanese) | [简体中文](README.zh-CN.md)
 
 <a name="english"></a>
 

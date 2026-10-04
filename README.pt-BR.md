@@ -45,3 +45,28 @@ Esta publicação contém o núcleo do emulador, a ferramenta de linha de comand
 ## Política de desenvolvimento das interfaces gráficas
 
 KOKURA-GUI e KUROSAKI-GUI continuam sem publicação. O desenvolvimento futuro das interfaces usará PLITA; SDL-GUI e egui-GUI não estão previstos para esses projetos. Este repositório continua distribuindo o núcleo, a ferramenta de linha de comando e as APIs de integração.
+
+
+<!-- native-platform-binaries-20261004-pt-BR -->
+### CLI pré-compiladas para Linux e macOS
+
+As CLI verificadas por execução no GitHub Actions estão nas pastas abaixo. Não é necessário instalar Rust, Python ou .NET para executá-las. A versão Linux é destinada a x86_64/glibc; no macOS, escolha a versão correspondente à CPU.
+
+| OS / CPU | CLI |
+| --- | --- |
+| Linux x86_64 (glibc) | [bin/linux-x86_64/kokura-cli](bin/linux-x86_64/kokura-cli) |
+| macOS ARM64 | [bin/macos-arm64/kokura-cli](bin/macos-arm64/kokura-cli) |
+| macOS Intel | [bin/macos-x86_64/kokura-cli](bin/macos-x86_64/kokura-cli) |
+
+```sh
+chmod +x bin/linux-x86_64/kokura-cli
+./bin/linux-x86_64/kokura-cli --help
+
+chmod +x bin/macos-arm64/kokura-cli
+./bin/macos-arm64/kokura-cli --help
+
+chmod +x bin/macos-x86_64/kokura-cli
+./bin/macos-x86_64/kokura-cli --help
+```
+
+Execute os comandos na raiz do repositório. Ao redistribuir os arquivos, mantenha LICENSE, LICENSE.ja, BINARY_NOTICES.md e licenses/. NATIVE_BINARIES.json contém hashes, dependências, revisões do código-fonte e resultados das verificações nativas.

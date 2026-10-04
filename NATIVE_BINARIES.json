@@ -1,0 +1,182 @@
+{
+  "project": "kokura",
+  "scope": "CLI executables only",
+  "source_commit": "19a29861b2b468199675cb2106a87e390aeb46f7",
+  "ci_run": "https://github.com/bartaro/kitaqgb-rust-validation-20261004/actions/runs/37136661755",
+  "ci_repository_private": true,
+  "validation_commit": "86765faefd124ad1f1d00cd6e76f00e0a34f09c6",
+  "native_ci_passed": true,
+  "source_files_sha256_verified": true,
+  "license_notices_verified_against_archives": true,
+  "records": [
+    {
+      "path": "bin/macos-arm64/kokura-cli",
+      "sha256": "9aae8609c629782753a035e68c45e45401b57cc54b668be208f2bb7f7d328261",
+      "bytes": 5244784,
+      "source_commit": "19a29861b2b468199675cb2106a87e390aeb46f7",
+      "source_repository": "https://github.com/bartaro/kokura",
+      "system": "Darwin",
+      "machine": "arm64",
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: aarch64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+      "apple_sdk": "26.5",
+      "test_count": 250,
+      "native_execution_verified": true,
+      "executable_dependencies": "/Users/runner/work/kitaqgb-rust-validation-20261004/kitaqgb-rust-validation-20261004/projects/kokura/target/release/kokura-cli:\n\t/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)\n\t/usr/lib/libbz2.1.0.dylib (compatibility version 1.0.0, current version 1.0.8)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1356.0.0)\n",
+      "format_verification": {
+        "format": "Mach-O64 arm64",
+        "macos_deployment_targets": [
+          "11.0.0"
+        ]
+      },
+      "native_smoke_checks": [
+        {
+          "case": "cli-help",
+          "passed": true
+        },
+        {
+          "case": "dmg-run",
+          "passed": true
+        },
+        {
+          "case": "dmg-state-resume",
+          "passed": true
+        },
+        {
+          "case": "cgb-run",
+          "passed": true
+        },
+        {
+          "case": "cgb-state-resume",
+          "passed": true
+        },
+        {
+          "case": "python-native-execution-and-state-roundtrip",
+          "passed": true
+        },
+        {
+          "case": "c-api-native-ROM-execution",
+          "passed": true
+        }
+      ],
+      "verified_original_archive_sha256": "033d601a3a5d312cc0286818396d3c61ff76445fd5c7c905e2a575e31ca1c122"
+    },
+    {
+      "path": "bin/macos-x86_64/kokura-cli",
+      "sha256": "4b17b94457fb526628e4774da0b64cb47f2b981c2257e2461c8839dc943cbeb3",
+      "bytes": 5704380,
+      "source_commit": "19a29861b2b468199675cb2106a87e390aeb46f7",
+      "source_repository": "https://github.com/bartaro/kokura",
+      "system": "Darwin",
+      "machine": "x86_64",
+      "platform": "macOS-15.7.9-x86_64-i386-64bit",
+      "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+      "apple_sdk": "15.5",
+      "test_count": 250,
+      "native_execution_verified": true,
+      "executable_dependencies": "/Users/runner/work/kitaqgb-rust-validation-20261004/kitaqgb-rust-validation-20261004/projects/kokura/target/release/kokura-cli:\n\t/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)\n\t/usr/lib/libbz2.1.0.dylib (compatibility version 1.0.0, current version 1.0.8)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)\n",
+      "format_verification": {
+        "format": "Mach-O64 x86_64",
+        "macos_deployment_targets": [
+          "10.12.0"
+        ]
+      },
+      "native_smoke_checks": [
+        {
+          "case": "cli-help",
+          "passed": true
+        },
+        {
+          "case": "dmg-run",
+          "passed": true
+        },
+        {
+          "case": "dmg-state-resume",
+          "passed": true
+        },
+        {
+          "case": "cgb-run",
+          "passed": true
+        },
+        {
+          "case": "cgb-state-resume",
+          "passed": true
+        },
+        {
+          "case": "python-native-execution-and-state-roundtrip",
+          "passed": true
+        },
+        {
+          "case": "c-api-native-ROM-execution",
+          "passed": true
+        }
+      ],
+      "verified_original_archive_sha256": "256886c02b40838f073c078394a7f3a5e0ccf9ae1313cf24e5cfa24d78124754"
+    },
+    {
+      "path": "bin/linux-x86_64/kokura-cli",
+      "sha256": "c7450fd78275a0f1169c62f4a7ba71ac79819e3406b87570d3152920f7c5e470",
+      "bytes": 6559856,
+      "source_commit": "19a29861b2b468199675cb2106a87e390aeb46f7",
+      "source_repository": "https://github.com/bartaro/kokura",
+      "system": "Linux",
+      "machine": "x86_64",
+      "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+      "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-unknown-linux-gnu\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+      "apple_sdk": null,
+      "test_count": 250,
+      "native_execution_verified": true,
+      "executable_dependencies": "\tlinux-vdso.so.1 (0x00007fb27028a000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007fb27024a000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fb26f800000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007fb27028c000)\n",
+      "format_verification": {
+        "format": "ELF64 x86_64",
+        "glibc_symbol_version_tags": [
+          "GLIBC_2.2.5",
+          "GLIBC_2.3",
+          "GLIBC_2.3.4",
+          "GLIBC_2.4",
+          "GLIBC_2.14",
+          "GLIBC_2.16",
+          "GLIBC_2.17",
+          "GLIBC_2.18",
+          "GLIBC_2.28",
+          "GLIBC_2.30",
+          "GLIBC_2.32",
+          "GLIBC_2.33",
+          "GLIBC_2.34"
+        ],
+        "highest_glibc_symbol_version": "GLIBC_2.34"
+      },
+      "native_smoke_checks": [
+        {
+          "case": "cli-help",
+          "passed": true
+        },
+        {
+          "case": "dmg-run",
+          "passed": true
+        },
+        {
+          "case": "dmg-state-resume",
+          "passed": true
+        },
+        {
+          "case": "cgb-run",
+          "passed": true
+        },
+        {
+          "case": "cgb-state-resume",
+          "passed": true
+        },
+        {
+          "case": "python-native-execution-and-state-roundtrip",
+          "passed": true
+        },
+        {
+          "case": "c-api-native-ROM-execution",
+          "passed": true
+        }
+      ],
+      "verified_original_archive_sha256": "2f6191330b9b082348a04d8a08b4ee3c410588dc40842f045945c276d8fb4dd2"
+    }
+  ]
+}

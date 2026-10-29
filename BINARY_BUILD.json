@@ -1,12 +1,12 @@
 {
-  "built_on": "2026-09-14",
+  "built_on": "2026-10-29",
   "licensor": "DAISUKE OBA",
   "configuration": "Release",
   "build_command": ".\\scripts\\build.ps1 -Offline",
   "build_exit_code": 0,
-  "source_revision_before_packaging": "047107ebe9754896a40e343da627cae9c8d9dbf0",
-  "source_state": "Reviewed publication working tree; source_inputs hashes identify the recorded files.",
-  "source_inventory_scope": "Public Rust workspace and build scripts; the executable contains the CLI dependency closure.",
+  "source_revision_before_packaging": "f0bf7aeb78786225e472d401c04a41d6585c37bc",
+  "source_state": "Committed public source; source_inputs identify exact Rust and build inputs.",
+  "source_inventory_scope": "Public Rust workspace and build scripts; executable links the CLI dependency closure.",
   "source_inputs": [
     {
       "path": "Cargo.lock",
@@ -122,7 +122,11 @@
     },
     {
       "path": "crates/kokura-core/src/apu.rs",
-      "sha256": "9368b79813b2fa1162327d0ca6ca92599ca55007325fcbd05f2bc722ac96e16f"
+      "sha256": "aab4922e058c666cd65f4fc18ff9f2003cb81480c5a78fe16fda5276eeb8d4eb"
+    },
+    {
+      "path": "crates/kokura-core/src/apu/accuracy_tests.rs",
+      "sha256": "b948c7f079bf6ef5f7f118f24336cbbdbb343efbf05ff658bf5b853b691e498e"
     },
     {
       "path": "crates/kokura-core/src/bus.rs",
@@ -343,8 +347,8 @@
   ],
   "binary": {
     "path": "kokura-cli.exe",
-    "bytes": 5805056,
-    "sha256": "335ae603c6dd4b4977d634517c404edfb112d1b38dbdb72266b97440639ee6f0",
+    "bytes": 5793792,
+    "sha256": "0b3810f9501c7279dc0a0338a0f9a93fc16caba5677ef3ea4ce5fead58f5d659",
     "imported_system_dlls": [
       "api-ms-win-core-synch-l1-2-0.dll",
       "kernel32.dll",
@@ -353,25 +357,86 @@
   },
   "checks": [
     {
-      "check": "--help captured",
+      "check": "Public workspace tests",
+      "tests_passed": 256,
+      "ignored": 1,
+      "command": "cargo test --workspace --locked --offline",
+      "passed": true,
+      "caveat": "Optional external-ROM scenarios are not established by the count."
+    },
+    {
+      "check": "APU regressions",
+      "tests_passed": 29,
+      "new_tests": 14,
+      "passed": true
+    },
+    {
+      "check": "Scoped rustfmt",
+      "path": "crates/kokura-core/src/apu.rs and its test module",
+      "passed": true
+    },
+    {
+      "check": "Workspace fmt",
+      "passed": false,
+      "reason": "Existing formatting differences in CLI tests, core examples/tests and debug events are outside this audio change."
+    },
+    {
+      "check": "CLI --help",
       "exit_code": 0
     },
     {
-      "check": "Current manual sample execution",
-      "samples": 29,
-      "frames_per_run": 120,
-      "result": "all passed",
-      "evidence": "https://bartaro.github.io/kitaq-docs/verification/current/samples.json"
+      "check": "Static CRT import inspection",
+      "passed": true
     },
     {
-      "check": "Unverified release-report flags and neutral observation-condition fixture",
-      "tests": 2,
+      "check": "old-state-cgb_noise",
+      "passed": true
+    },
+    {
+      "check": "old-state-cgb_wave",
+      "passed": true
+    },
+    {
+      "check": "old-state-cgb_zero_pace_pulse",
+      "passed": true
+    },
+    {
+      "check": "old-state-dmg_noise",
+      "passed": true
+    },
+    {
+      "check": "old-state-dmg_wave",
+      "passed": true
+    },
+    {
+      "check": "old-state-dmg_zero_pace_pulse",
+      "passed": true
+    },
+    {
+      "check": "six-synthetic-audio-recordings",
+      "passed": true
+    },
+    {
+      "check": "link16_cable",
+      "passed": true
+    },
+    {
+      "check": "link16_cable-resume",
+      "passed": true
+    },
+    {
+      "check": "ressen",
+      "passed": true
+    },
+    {
+      "check": "ressen-resume",
       "passed": true
     }
   ],
-  "scope": "Windows CLI release. Compilation and bounded emulator execution are separate checks; no blanket physical-hardware or peripheral compatibility claim.",
   "target": "x86_64-pc-windows-msvc",
   "rustflags": "-C target-feature=+crt-static",
   "cargo_lock_sha256": "ecad5e5636b70117b1bb2cde3d420b1f9df6732e84f5c7cdf3dd8f5dfd15e0ca",
-  "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-pc-windows-msvc\nrelease: 1.93.1\nLLVM version: 21.1.8"
+  "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-pc-windows-msvc\nrelease: 1.93.1\nLLVM version: 21.1.8",
+  "dependency_notices": "Cargo.lock and bundled dependency notices unchanged; no dependencies added.",
+  "scope": "CLI/core/API only. Bounded software tests, PCM recordings and state decoding; no physical-hardware or human-listening certification."
 }

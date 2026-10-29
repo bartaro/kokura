@@ -8,6 +8,17 @@
 early without their inputs; the count does not certify those external scenarios.
 No private GUI or ROM data is included. See `APU_ACCURACY.md` for limitations.
 
+The Windows CLI was rebuilt with static CRT and exercised with six synthetic
+audio fixtures, six previous-version states, and copied local DMG/CGB ROMs.
+Linux x86_64 and both macOS architectures each passed 264 native tests plus
+CLI, C API and Python execution/state checks. Binary identities are recorded
+in `BINARY_BUILD.json` and `NATIVE_BINARIES.json`.
+
+Scoped rustfmt passes for the changed APU module and its tests. A full workspace
+fmt check still reports pre-existing formatting differences in CLI tests,
+core examples/tests and debug event comments; those files are not reformatted
+by this audio update. Test counts do not certify device playback or hardware.
+
 Workspace test record: September 12, 2026, on Windows x86_64.
 The executable build record is identified separately in `BINARY_BUILD.json`.
 

@@ -1,5 +1,13 @@
 # Publication checks
 
+## 2026-10-29 source update
+
+`cargo test --workspace --locked --offline` passed on Windows x86_64:
+256 tests passed, one manual profiling test ignored. This includes 29 APU tests,
+14 of which are new accuracy regressions. Optional external-ROM tests can return
+early without their inputs; the count does not certify those external scenarios.
+No private GUI or ROM data is included. See `APU_ACCURACY.md` for limitations.
+
 Workspace test record: September 12, 2026, on Windows x86_64.
 The executable build record is identified separately in `BINARY_BUILD.json`.
 

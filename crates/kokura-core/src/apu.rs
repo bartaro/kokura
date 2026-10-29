@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{ApuTraceEvent, HardwareMode};
 
+#[cfg(test)]
+mod accuracy_tests;
+
 const APU_FRAME_SEQUENCER_CYCLES: u16 = 8192;
 const APU_MIX_TRACE_CYCLES: u16 = 1024;
 const APU_PCM_SAMPLE_CYCLES: u16 = 64;
@@ -12,6 +15,23 @@ pub const APU_OUTPUT_SAMPLE_RATE: u32 = 65_536;
 const DEFAULT_APU_PCM_BUFFER_CAPACITY_FRAMES: usize = 65_536;
 const APU_HPF_CHARGE_FACTOR_DMG: f64 = 0.999_958;
 const APU_HPF_CHARGE_FACTOR_CGB: f64 = 0.998_943;
+const APU_HPF_SAMPLE_FACTOR_DMG: f64 = sample_charge_factor(APU_HPF_CHARGE_FACTOR_DMG);
+const APU_HPF_SAMPLE_FACTOR_CGB: f64 = sample_charge_factor(APU_HPF_CHARGE_FACTOR_CGB);
+const REGISTER_READ_MASKS: [u8; 0x16] = [
+    0x80, 0x3F, 0x00, 0xFF, 0xBF, 0xFF, 0x3F, 0x00, 0xFF, 0xBF, 0x7F, 0xFF, 0x9F, 0xFF, 0xBF, 0xFF,
+    0xFF, 0x00, 0x00, 0xBF, 0x00, 0x00,
+];
+
+// Hardware charge factors are per T-cycle, not per output sample.
+const fn sample_charge_factor(per_clock: f64) -> f64 {
+    let mut factor = 1.0;
+    let mut clocks = 0;
+    while clocks < APU_PCM_SAMPLE_CYCLES {
+        factor *= per_clock;
+        clocks += 1;
+    }
+    factor
+}
 const APU_OUTPUT_LPF_ALPHA_DMG: f64 = 0.68;
 const APU_OUTPUT_LPF_ALPHA_CGB: f64 = 0.78;
 const DUTY_PATTERNS: [[u8; 8]; 4] = [
@@ -71,7 +91,7 @@ impl Default for ChannelState {
             wave_position: 0,
             wave_sample_buffer: 0,
             lfsr: 0x7FFF,
-            force_zero_until_advance: false,
+            force_zero_until_advance: true,
             sweep_negate_used: false,
         }
     }
@@ -189,7 +209,10 @@ impl Apu {
     // active DMG wave-RAM reads and aliases active CGB accesses to the current wave byte.
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0xFF10..=0xFF25 => self.regs[(addr - 0xFF10) as usize],
+            0xFF10..=0xFF25 => {
+                let index = (addr - 0xFF10) as usize;
+                self.regs[index] | REGISTER_READ_MASKS[index]
+            }
             0xFF26 => 0x70 | (u8::from(self.master_enabled) << 7) | (self.channel_enable & 0x0F),
             0xFF30..=0xFF3F => {
                 let requested = (addr - 0xFF30) as usize;
@@ -211,6 +234,21 @@ impl Apu {
         let mut trace = Vec::new();
         match addr {
             0xFF10..=0xFF25 => {
+                if !self.master_enabled {
+                    if !self.cgb_mode {
+                        let length = match addr {
+                            0xFF11 => Some((0, 64 - u16::from(value & 0x3F))),
+                            0xFF16 => Some((1, 64 - u16::from(value & 0x3F))),
+                            0xFF1B => Some((2, 256 - u16::from(value))),
+                            0xFF20 => Some((3, 64 - u16::from(value & 0x3F))),
+                            _ => None,
+                        };
+                        if let Some((index, counter)) = length {
+                            self.channels[index].length_counter = counter;
+                        }
+                    }
+                    return trace;
+                }
                 let reg_index = (addr - 0xFF10) as usize;
                 let old_value = self.regs[reg_index];
                 self.regs[reg_index] = value;
@@ -550,12 +588,21 @@ impl Apu {
         }
     }
 
-    // Apply initial volume/direction and reload the envelope timer immediately, then
-    // derive the DAC gate from the upper five bits of the envelope register.
+    // Handle the documented increasing zero-pace volume step before reloading
+    // envelope parameters and deriving the DAC gate from the upper five bits.
     fn update_envelope_from_reg(&mut self, channel: u8, value: u8, trace: &mut Vec<ApuTraceEvent>) {
         let idx = (channel - 1) as usize;
         let st = &mut self.channels[idx];
-        st.envelope_volume = (value >> 4) & 0x0F;
+        // This zero-pace increasing-envelope case is consistent across DMG/CGB.
+        st.envelope_volume = if st.enabled
+            && st.envelope_period == 0
+            && st.envelope_increase
+            && value & 0x0F == 0x08
+        {
+            (st.envelope_volume + 1) & 0x0F
+        } else {
+            (value >> 4) & 0x0F
+        };
         st.envelope_increase = value & 0x08 != 0;
         st.envelope_period = value & 0x07;
         st.envelope_counter = if st.envelope_period == 0 {
@@ -654,11 +701,7 @@ impl Apu {
             }
             st.shadow_frequency = freq;
             st.freq_timer = period;
-            st.duty_position = 0;
             st.wave_position = 0;
-            if matches!(channel, 1 | 2) {
-                st.force_zero_until_advance = true;
-            }
             st.lfsr = 0x7FFF;
             if channel == 1 {
                 st.sweep_period = sweep_period;
@@ -724,10 +767,9 @@ impl Apu {
         }
     }
 
-    // Refresh the frequency shadow; an already running frequency timer is not restarted here.
+    // Initialize an idle divider without replacing the trigger-latched sweep shadow.
     fn sync_frequency_from_regs(&mut self, channel: u8) {
         let idx = (channel - 1) as usize;
-        self.channels[idx].shadow_frequency = self.current_frequency(channel);
         if self.channels[idx].freq_timer == 0 {
             self.channels[idx].freq_timer = self.period_for_channel(channel).max(1);
         }
@@ -743,7 +785,7 @@ impl Apu {
         }
     }
 
-    // Write pitch bits while preserving control flags, update the shadow and restart the timer.
+    // Update pitch and shadow without restarting the running divider.
     fn set_current_frequency(&mut self, channel: u8, frequency: u16) {
         let low = (frequency & 0x00FF) as u8;
         let high = ((frequency >> 8) as u8) & 0x07;
@@ -764,7 +806,6 @@ impl Apu {
         }
         let idx = (channel - 1) as usize;
         self.channels[idx].shadow_frequency = frequency;
-        self.channels[idx].freq_timer = self.period_for_channel(channel).max(1);
     }
 
     // Implement this model's active-CGB current-byte alias; otherwise clamp the requested RAM index.
@@ -954,7 +995,7 @@ impl Apu {
         } else {
             self.channels[0].sweep_period
         };
-        if self.channels[0].sweep_shift == 0 {
+        if self.channels[0].sweep_period == 0 {
             return;
         }
         let old = self.channels[0].shadow_frequency;
@@ -975,6 +1016,9 @@ impl Apu {
                 reason: 3,
                 reg: 0xFF10,
             });
+            return;
+        }
+        if shift == 0 {
             return;
         }
         let delta2 = next >> shift;
@@ -1074,9 +1118,9 @@ impl Apu {
     // Select the model's DMG/CGB high-pass charge coefficient for each generated PCM frame.
     fn hpf_charge_factor(&self) -> f64 {
         if self.cgb_mode {
-            APU_HPF_CHARGE_FACTOR_CGB
+            APU_HPF_SAMPLE_FACTOR_CGB
         } else {
-            APU_HPF_CHARGE_FACTOR_DMG
+            APU_HPF_SAMPLE_FACTOR_DMG
         }
     }
 
@@ -1516,9 +1560,8 @@ mod tests {
     }
 
     #[test]
-    // Inject 120 constant mix averages and check retained amplitude; this is a filter
-    // regression assertion rather than a hardware waveform or sustained-tone listening test.
-    fn cgb_hpf_keeps_sustained_tones_audible() {
+    // Constant mixer input is DC and must decay, unlike an oscillating tone.
+    fn cgb_hpf_rejects_constant_dc_input() {
         let mut apu = Apu::default();
         apu.set_cgb_mode(true);
         apu.write(0xFF26, 0x80);
@@ -1534,8 +1577,8 @@ mod tests {
             drained = apu.drain_interleaved_i16(1);
         }
 
-        assert!(drained[0].abs() > 1_500);
-        assert!(drained[1].abs() > 1_500);
+        assert!(drained[0].abs() < 2);
+        assert!(drained[1].abs() < 2);
     }
 
     #[test]

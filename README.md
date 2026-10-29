@@ -26,6 +26,9 @@ GB/GBC emulator with CLI, tracing, debugging and Python/C interfaces.
 
 Public preview: APIs and behavior may change.
 
+The 2026-10-29 core update corrects pulse retrigger, sweep, envelope volume steps,
+register access and DMG/CGB output filtering. See [APU accuracy notes](APU_ACCURACY.md).
+
 ### Prebuilt Windows CLI
 
 The repository root includes `kokura-cli.exe`, built for Windows x64 in Release mode.
@@ -82,6 +85,9 @@ continues to distribute the core, CLI and integration APIs.
 CLI、トレース、デバッグ、Python・Cインターフェースを備えたGB/GBCエミュレータです。
 
 パブリックプレビュー版です。APIや動作は変更される場合があります。
+
+2026-10-29更新では、パルス波の再発音、スイープ、音量ステップ、レジスタの読み書き、
+DMG/CGBの出力フィルタを修正しました。[音源精度の変更点と検証範囲](APU_ACCURACY.md)を参照してください。
 
 ### ビルド済みWindows CLI
 

@@ -21,6 +21,9 @@ pub struct Timer {
 impl Timer {
     // Install the modeled post-boot divider value for DMG/CGB and clear programmable
     // timer state, including any pending overflow reload.
+    pub(crate) fn divider_counter(&self) -> u16 {
+        self.div_counter
+    }
     pub fn initialize_post_boot_state(&mut self, cgb_mode: bool) {
         self.div_counter = if cgb_mode { 0 } else { 0xC600 };
         self.div = (self.div_counter >> 8) as u16;

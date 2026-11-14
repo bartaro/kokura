@@ -1,0 +1,115 @@
+{
+  "date": "2026-11-14",
+  "baseline": "8f6235b4174c0141e546054cc32af8eed0142e78",
+  "tests": {
+    "passed": 304,
+    "failed": 0,
+    "ignored": 1
+  },
+  "binaries_updated": false,
+  "physical_hardware_tested": false,
+  "scope": "Shared KOKURA core and CLI audio regression tests; public comments, example curation, manifests and licenses retained.",
+  "publication_date": "2026-11-15",
+  "files": [
+    {
+      "path": "APU_ACCURACY.md",
+      "sha256": "54b5ae1bf3de541fa4d5315f5bf091d78b711282376b6026cbb5b1e99a67d154",
+      "bytes": 2830
+    },
+    {
+      "path": "README.de.md",
+      "sha256": "e7cca601ce0f3d060b8c647c68afadcb2d9cf65cd395f4955001a0f2496f40b2",
+      "bytes": 4220
+    },
+    {
+      "path": "README.es.md",
+      "sha256": "aa34116a9f02d9742d9f314d4727d485754e93ced2f0652850de9c532d8764ac",
+      "bytes": 4204
+    },
+    {
+      "path": "README.fr.md",
+      "sha256": "9a40eadeb7f9028701ee046808d88e05b0397071875523cc2ac32f912a852e7c",
+      "bytes": 4164
+    },
+    {
+      "path": "README.ko.md",
+      "sha256": "d2cd194af21a1f0cae3771cdc6174ac2b6b2a7f6683a3b4b28b20c8d4f5a51bb",
+      "bytes": 4259
+    },
+    {
+      "path": "README.md",
+      "sha256": "761cd437b259f6dfd872f6653198dd936573479ebbe1511119ae0850cb88c36a",
+      "bytes": 9235
+    },
+    {
+      "path": "README.pt-BR.md",
+      "sha256": "7479d93f0706a6c465aa983c872c78f7b2e995bbcdea0af9b65d2fe5cdb3df67",
+      "bytes": 4369
+    },
+    {
+      "path": "README.zh-CN.md",
+      "sha256": "25a675074ee3919d2b1f9441381fe1f5e17f2128e42766c92b0fee75433bac8e",
+      "bytes": 3515
+    },
+    {
+      "path": "README.zh-TW.md",
+      "sha256": "005c1ad4b606ccfdb234d177fc6466a489d0a4f81f12de432c461062f3a8fab4",
+      "bytes": 3704
+    },
+    {
+      "path": "crates/kokura-cli/src/run.rs",
+      "sha256": "c2d60ce1545428f35c42e1ef077498e9da82aac697b6ca4813a8a537b95453c1",
+      "bytes": 306654
+    },
+    {
+      "path": "crates/kokura-core/src/apu.rs",
+      "sha256": "7de2ff5d0c7736df6787fc4a697e4a06b3532734ea66225b4fa7755c2315cccb",
+      "bytes": 67183
+    },
+    {
+      "path": "crates/kokura-core/src/apu/accuracy_tests.rs",
+      "sha256": "998a0c460c6b847a0a468196636acf8dd58c2b5b7ba6eeb20597a2b34022c1c8",
+      "bytes": 18486
+    },
+    {
+      "path": "crates/kokura-core/src/apu/register_write_tests.rs",
+      "sha256": "7bece0b0075293b30ff3b1548c7f178d653c3df5a73c0bdd48ecf1b58541fa1e",
+      "bytes": 12138
+    },
+    {
+      "path": "crates/kokura-core/src/audio_timing.rs",
+      "sha256": "a946893576829647dfd35ac1f024581a142e197f5f5086bc7a6542bb6a16944f",
+      "bytes": 1851
+    },
+    {
+      "path": "crates/kokura-core/src/audio_timing/tests.rs",
+      "sha256": "03557388eda5d9ac1b4c6498844bf311b971f0becf344ce5003df7fbea2f71ba",
+      "bytes": 9504
+    },
+    {
+      "path": "crates/kokura-core/src/lib.rs",
+      "sha256": "53ba63c5e9cb2d503034fa71cb2043a69d30597112ff73207ed87a0fad87b71b",
+      "bytes": 199104
+    },
+    {
+      "path": "crates/kokura-core/src/timer.rs",
+      "sha256": "88c1c01334dde39fde0ff38c8df7b7b549751ad36778769e3dc6b5a65990e65c",
+      "bytes": 10263
+    },
+    {
+      "path": "docs/audio_accuracy_validation_20261113.md",
+      "sha256": "0d780f2d683874c6a2740718a14ae997b8880c274d04f7630f2e24e84a4f1e08",
+      "bytes": 2665
+    },
+    {
+      "path": "docs/audio_register_writes_validation_20261114.md",
+      "sha256": "09566728e49e04bb3a5858dc253f03cc6e092872f78ff15677d87029ef75a379",
+      "bytes": 6821
+    },
+    {
+      "path": "docs/audio_timing_validation_20261114.md",
+      "sha256": "89f9a409792e94ebc778c9e78bec0c1af5c890591206eebdfc813851e7870eb2",
+      "bytes": 5550
+    }
+  ]
+}

@@ -2308,6 +2308,7 @@ fn build_job_debug_session(job: &LoadedJob) -> Result<Box<DebugSession>> {
             .validate_header_against_machine(&machine)
             .with_context(|| format!("state file does not match loaded ROM: {}", state_path))?;
         machine.load_state(&state);
+        let _ = machine.drain_audio_frames_interleaved_i16(usize::MAX);
     }
     if let Some(audio_buffer_frames) = job.audio_buffer_frames {
         machine
@@ -6605,14 +6606,23 @@ fn normalize_event_type_label(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use clap::Parser;
 
     use kokura_bridge::{DecompileArtifact, DecompileFunctionInfo, DecompileReport};
-    use kokura_core::Machine;
+    use kokura_core::{state::MachineState, Machine};
     use kokura_debug::report::{ReplayCheckpointReport, ReplayReport, ReplaySliceReport};
     use kokura_debug::{DebugSession, ReplayControlSet, StopConditionSet};
     use serde_json::json;
 
+    use crate::args::Args;
     use super::{
         build_link_runner_layout, build_replay_mismatch_snapshot_plan, build_replay_tape,
         classify_diff_severity, compare_replay_reports, encode_gif, encode_wav, encode_y4m,
@@ -6800,7 +6810,7 @@ mod tests {
     // Check parsing of a three-term observation condition; no ROM or symbol resolution runs here.
     fn observation_condition_accepts_frame_ly_and_symbol_terms() {
         let condition =
-            parse_observation_condition("frame=120&&ly=42&&symbol=DrawFrame")
+            parse_observation_condition("frame=379&&ly=42&&symbol=x_transfer_stage_5a14_asm")
                 .unwrap();
         assert_eq!(condition.terms.len(), 3);
     }
@@ -7115,6 +7125,194 @@ mod tests {
         assert_eq!(wav.len(), 52);
     }
 
+    struct AudioCaptureFixture {
+        rom_path: PathBuf,
+        state_path: PathBuf,
+        wav_path: PathBuf,
+    }
+
+    impl AudioCaptureFixture {
+        fn new() -> Self {
+            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let base = std::env::temp_dir().join(format!(
+                "kokura_cli_audio_{}_{}_{}",
+                std::process::id(),
+                nanos,
+                NEXT_ID.fetch_add(1, Ordering::Relaxed)
+            ));
+            let fixture = Self {
+                rom_path: base.with_extension("gb"),
+                state_path: base.with_extension("kqs"),
+                wav_path: base.with_extension("wav"),
+            };
+            let mut rom = vec![0; 0x8000];
+            // A 16-cycle loop keeps the nominal frame boundaries exact.
+            rom[0x100..0x103].copy_from_slice(&[0x00, 0x18, 0xFD]);
+            fs::write(&fixture.rom_path, rom).unwrap();
+            fixture
+        }
+
+        fn machine(&self) -> Box<Machine> {
+            let mut machine = Box::new(Machine::new());
+            machine.load_rom(fs::read(&self.rom_path).unwrap()).unwrap();
+            for (addr, value) in [
+                (0xFF26, 0),
+                (0xFF26, 0x80),
+                (0xFF24, 0x77),
+                (0xFF25, 0x20),
+                (0xFF16, 0x80),
+                (0xFF17, 0xF0),
+                (0xFF18, 0xD6),
+                (0xFF19, 0x86),
+            ] {
+                machine.write8(addr, value);
+            }
+            machine
+        }
+
+        fn args(&self) -> Args {
+            Args::try_parse_from([
+                "kokuradbg",
+                self.rom_path.to_str().unwrap(),
+                "--load-state",
+                self.state_path.to_str().unwrap(),
+                "--record-wav",
+                self.wav_path.to_str().unwrap(),
+                "--run-frames",
+                "4",
+            ])
+            .unwrap()
+        }
+
+        fn expected_wav(&self, frames: u64, range: super::FrameRange) -> Vec<u8> {
+            // Deserialize both paths so this tests capture origin, not filter serialization.
+            let mut machine = self.machine();
+            let state = MachineState::load_boxed_from_path(&self.state_path).unwrap();
+            machine.load_state(&state);
+            let _ = machine.drain_audio_frames_interleaved_i16(usize::MAX);
+            let mut samples = Vec::new();
+            for frame in 1..=frames {
+                machine.run_frame().unwrap();
+                let drained = machine.drain_audio_frames_interleaved_i16(usize::MAX);
+                if range.contains(frame) {
+                    samples.extend(drained);
+                }
+            }
+            encode_wav(machine.audio_sample_rate(), &samples)
+        }
+
+        fn record(&self, args: Args) -> Vec<u8> {
+            super::execute_args(&args).unwrap();
+            fs::read(&self.wav_path).unwrap()
+        }
+    }
+
+    impl Drop for AudioCaptureFixture {
+        fn drop(&mut self) {
+            for path in [&self.rom_path, &self.state_path, &self.wav_path] {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
+    fn assert_same_wav(actual: &[u8], expected: &[u8]) {
+        assert_eq!(actual.len(), expected.len(), "WAV length");
+        assert_eq!(
+            actual.iter().zip(expected).position(|(a, b)| a != b),
+            None,
+            "first differing WAV byte"
+        );
+    }
+
+    #[test]
+    fn wav_capture_discards_restored_pending_pcm_without_resetting_phase() {
+        let fixture = AudioCaptureFixture::new();
+        let mut machine = fixture.machine();
+        for _ in 0..2 {
+            machine.run_frame().unwrap();
+        }
+        for _ in 0..7 {
+            machine.step_instruction().unwrap();
+        }
+        assert!(machine.audio_frames_available() > 0);
+        assert_ne!(machine.clocks.frame_phase_ppu_cycles, 0);
+        machine
+            .save_state()
+            .save_to_path(&fixture.state_path)
+            .unwrap();
+        let expected = fixture.expected_wav(4, super::FrameRange { start: 1, end: 4 });
+        assert!(expected[44..].iter().any(|byte| *byte != 0));
+
+        for observation in [false, true] {
+            let mut args = fixture.args();
+            if observation {
+                args.trace_points.push("frame=999999".to_string());
+                args.resume_state = args.load_state.take();
+            }
+            assert_same_wav(&fixture.record(args), &expected);
+        }
+    }
+
+    #[test]
+    fn wav_capture_range_is_inclusive_and_relative_across_input_segments() {
+        let fixture = AudioCaptureFixture::new();
+        let mut machine = fixture.machine();
+        for _ in 0..5 {
+            machine.run_frame().unwrap();
+        }
+        machine
+            .save_state()
+            .save_to_path(&fixture.state_path)
+            .unwrap();
+        let expected = fixture.expected_wav(4, super::FrameRange { start: 2, end: 3 });
+        assert!(expected.len() > 44);
+
+        for mode in 0..3 {
+            let mut args = fixture.args();
+            args.record_wav_frames = Some("2:3".to_string());
+            if mode == 1 {
+                args.input_seq = Some("NONE:1;NONE:2;NONE:1".to_string());
+            } else if mode == 2 {
+                args.trace_points.push("frame=999999".to_string());
+            }
+            assert_same_wav(&fixture.record(args), &expected);
+        }
+    }
+
+    #[test]
+    fn wav_capture_powered_off_silence_keeps_native_rate_and_duration() {
+        let fixture = AudioCaptureFixture::new();
+        let mut machine = fixture.machine();
+        machine.write8(0xFF26, 0);
+        machine
+            .save_state()
+            .save_to_path(&fixture.state_path)
+            .unwrap();
+        let sample_rate = machine.audio_sample_rate();
+        let pcm_frames =
+            u64::from(sample_rate) * u64::from(machine.ppu.frame_cycles()) * 4 / 4_194_304;
+
+        for observation in [false, true] {
+            let mut args = fixture.args();
+            if observation {
+                args.trace_points.push("frame=999999".to_string());
+            }
+            let wav = fixture.record(args);
+            let read_u32 = |offset| u32::from_le_bytes(wav[offset..offset + 4].try_into().unwrap());
+            assert_eq!(read_u32(24), sample_rate);
+            assert_eq!(read_u32(28), sample_rate * 4);
+            assert_eq!(&wav[20..24], &[1, 0, 2, 0]);
+            assert_eq!(&wav[32..36], &[4, 0, 16, 0]);
+            assert_eq!(u64::from(read_u32(40)), pcm_frames * 4);
+            assert_eq!(wav.len() as u64, 44 + pcm_frames * 4);
+            assert_eq!(read_u32(4) as usize, wav.len() - 8);
+            assert!(wav[44..].iter().all(|byte| *byte == 0));
+        }
+    }
     #[test]
     // Check the Y4M stream prefix and one frame marker, without decoding its pixels.
     fn y4m_encoder_emits_header_and_frame_marker() {

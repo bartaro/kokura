@@ -21,6 +21,7 @@ pub mod state;
 pub mod timer;
 pub mod types;
 
+mod audio_timing;
 use apu::Apu;
 use cartridge::Cartridge;
 use cpu::Cpu;
@@ -93,6 +94,7 @@ pub struct Machine {
     diagnostic_events: DiagnosticEventEmitter,
     active_interrupt_vector: Option<u16>,
     pending_cpu_stall_cycles: u32,
+    instruction_clock: audio_timing::InstructionClock,
     pub cgb_double_speed: bool,
     pub cgb_speed_switch_armed: bool,
     pub cgb_speed_switch_freeze_cycles: u32,
@@ -125,6 +127,7 @@ impl Machine {
             diagnostic_events: DiagnosticEventEmitter::default(),
             active_interrupt_vector: None,
             pending_cpu_stall_cycles: 0,
+            instruction_clock: audio_timing::InstructionClock::default(),
             cgb_double_speed: false,
             cgb_speed_switch_armed: false,
             cgb_speed_switch_freeze_cycles: 0,
@@ -199,6 +202,7 @@ impl Machine {
         self.diagnostic_events.clear();
         self.active_interrupt_vector = None;
         self.pending_cpu_stall_cycles = 0;
+        self.instruction_clock = audio_timing::InstructionClock::default();
         self.cgb_speed_switch_freeze_cycles = 0;
         // Leave the selected-mode observation pending for the next traced step after other startup traces are cleared.
         self.pending_cgb_trace.push(CgbTraceEvent::ModeSelected {
@@ -281,6 +285,8 @@ impl Machine {
         self.interrupt.ie = 0x00;
         self.interrupt.iflag = 0x01;
         self.apu.initialize_post_boot_state(self.mode);
+        self.apu
+            .sync_divider_phase(self.timer.divider_counter(), self.cgb_double_speed);
         self.clocks.frame_phase_ppu_cycles = u32::from(self.ppu.ly) * 456 + self.ppu.mode_cycles;
     }
 
@@ -435,6 +441,7 @@ impl Machine {
     // Handle a pending interrupt or halted idle step before fetching an opcode. A failed
     // opcode execution can leave PC/bus side effects applied and does not call finish_step.
     pub fn step_instruction(&mut self) -> Result<StepResult, error::CoreError> {
+        self.instruction_clock.fast = false;
         let mut serviced_interrupt = false;
         if self.interrupt.has_pending() {
             let pending_mask = self.interrupt.pending_mask();
@@ -475,6 +482,7 @@ impl Machine {
     // Use the same opcode execution path with fast timing finalization and discarded traces.
     // An enabled pending interrupt wakes HALT regardless of IME; servicing consumes its own step.
     pub fn step_instruction_fast(&mut self) -> Result<(), error::CoreError> {
+        self.instruction_clock.fast = true;
         let mut serviced_interrupt = false;
         if self.interrupt.has_pending() {
             self.cpu.halted = false;
@@ -604,6 +612,8 @@ impl Machine {
         self.ppu.restore_runtime_state(&self.memory);
         // Rebuild visible pixels from restored current memory/registers; this is not a replay
         // of mid-frame rendering history, even when a saved framebuffer was present.
+        self.apu
+            .sync_divider_phase(self.timer.divider_counter(), self.cgb_double_speed);
         self.ppu.render_visible_area_from_memory_with_mode(
             &self.memory,
             self.mode == HardwareMode::Cgb,
@@ -618,6 +628,7 @@ impl Machine {
         self.pending_interrupt_trace.clear();
         self.diagnostic_events.clear();
         self.pending_cpu_stall_cycles = 0;
+        self.instruction_clock = audio_timing::InstructionClock::default();
     }
 
     // Borrow the 160x144 shade plane; contents can change after execution or state restoration.
@@ -925,6 +936,10 @@ impl Machine {
     // Use a predicted sample for supported timed I/O registers; all other addresses
     // fall back to the ordinary traced bus read.
     fn read8_timed(&mut self, addr: u16, cpu_cycles_until_sample: u32) -> u8 {
+        if audio_timing::is_audio_io(addr) {
+            self.advance_to_audio_io(cpu_cycles_until_sample);
+            return self.read8(addr);
+        }
         if let Some(value) = self.predict_timed_io_read(addr, cpu_cycles_until_sample) {
             value
         } else {
@@ -1049,10 +1064,7 @@ impl Machine {
             }
             // Reset DIV through its edge-aware handler; discarding the counter alone would miss timer side effects.
             0xFF04 => {
-                let mut trace = Vec::new();
-                self.timer.write_div(&mut trace);
-                self.pending_io_trace
-                    .extend(trace.into_iter().map(IoTraceEvent::Timer));
+                self.reset_divider();
             }
             0xFF05 => self.timer.write_tima(value),
             0xFF06 => self.timer.write_tma(value),
@@ -1477,7 +1489,7 @@ impl Machine {
             3 => self.cpu.e,
             4 => self.cpu.h,
             5 => self.cpu.l,
-            6 => self.read8(self.cpu.hl()),
+            6 => self.read8_audio_timed(self.cpu.hl(), 4),
             _ => self.cpu.a,
         }
     }
@@ -1493,7 +1505,7 @@ impl Machine {
             5 => self.cpu.l = value,
             6 => {
                 let addr = self.cpu.hl();
-                self.write8(addr, value);
+                self.write8_timed(addr, value, 4);
             }
             _ => self.cpu.a = value,
         }
@@ -1606,7 +1618,9 @@ impl Machine {
     fn finish_step(&mut self, cycles: u32) -> StepResult {
         let total_cycles =
             cycles.saturating_add(std::mem::take(&mut self.pending_cpu_stall_cycles));
-        let total_ppu_cycles = self.cpu_cycles_to_ppu_cycles(total_cycles);
+        let mut prefix = std::mem::take(&mut self.instruction_clock);
+        let remaining_cycles = total_cycles.saturating_sub(prefix.cpu_cycles);
+        let total_ppu_cycles = self.cpu_cycles_to_ppu_cycles(remaining_cycles);
         let (
             frame_completed,
             ppu_trace,
@@ -1614,7 +1628,13 @@ impl Machine {
             mapper_trace_from_clocks,
             io_trace_from_clocks,
             apu_trace_from_clocks,
-        ) = self.advance_clocks(total_cycles, total_ppu_cycles);
+        ) = self.advance_clocks(remaining_cycles, total_ppu_cycles);
+        let ppu_trace = if prefix.ppu_trace.is_empty() {
+            ppu_trace
+        } else {
+            prefix.ppu_trace.extend(ppu_trace);
+            prefix.ppu_trace
+        };
         // Place pending write-side observations before clock-generated observations within each trace family.
         // Separate family vectors do not by themselves encode one globally interleaved event order.
         let mut dma_trace = std::mem::take(&mut self.pending_dma_trace);
@@ -1630,7 +1650,7 @@ impl Machine {
         self.commit_ime_enable_delay();
         StepResult {
             cycles: total_cycles,
-            frame_completed,
+            frame_completed: frame_completed || prefix.frame_completed,
             ppu_trace,
             dma_trace,
             mapper_trace,
@@ -1646,8 +1666,10 @@ impl Machine {
     fn finish_step_fast(&mut self, cycles: u32) {
         let total_cycles =
             cycles.saturating_add(std::mem::take(&mut self.pending_cpu_stall_cycles));
-        let total_ppu_cycles = self.cpu_cycles_to_ppu_cycles(total_cycles);
-        self.advance_clocks_fast(total_cycles, total_ppu_cycles);
+        let prefix = std::mem::take(&mut self.instruction_clock);
+        let remaining_cycles = total_cycles.saturating_sub(prefix.cpu_cycles);
+        let total_ppu_cycles = self.cpu_cycles_to_ppu_cycles(remaining_cycles);
+        self.advance_clocks_fast(remaining_cycles, total_ppu_cycles);
         self.clear_pending_traces();
         self.commit_ime_enable_delay();
     }
@@ -1712,7 +1734,13 @@ impl Machine {
                 let fast_only = remaining_cpu;
                 self.clocks.cycles += fast_only as u64;
                 // A residual CPU-only interval advances timer, standalone serial and OAM DMA, but not PPU/APU/mapper.
+                let divider_before = self.timer.divider_counter();
                 let timer_result = self.timer.tick(fast_only);
+                apu_trace.extend(self.apu.observe_divider_only(
+                    divider_before,
+                    self.timer.divider_counter(),
+                    self.cgb_double_speed,
+                ));
                 io_trace.extend(timer_result.trace.into_iter().map(IoTraceEvent::Timer));
                 if timer_result.interrupt_requested {
                     self.request_interrupt(INT_TIMER, InterruptSource::Timer);
@@ -1744,6 +1772,8 @@ impl Machine {
 
             self.clocks.cycles += step_cpu as u64;
 
+            self.apu
+                .sync_divider_phase(self.timer.divider_counter(), self.cgb_double_speed);
             let timer_result = self.timer.tick(step_cpu);
             io_trace.extend(timer_result.trace.into_iter().map(IoTraceEvent::Timer));
             if timer_result.interrupt_requested {
@@ -1833,10 +1863,16 @@ impl Machine {
             if remaining_ppu == 0 {
                 let fast_only = remaining_cpu;
                 self.clocks.cycles += fast_only as u64;
+                let divider_before = self.timer.divider_counter();
                 if self.timer.tick_fast(fast_only) {
                     self.request_interrupt(INT_TIMER, InterruptSource::Timer);
                 }
                 // An attached cable delegates byte completion to the cooperative runner instead of open-bus serial ticking.
+                self.apu.observe_divider_only(
+                    divider_before,
+                    self.timer.divider_counter(),
+                    self.cgb_double_speed,
+                );
                 if !self.serial_link_attached && self.serial.tick_fast(fast_only) {
                     self.request_interrupt(INT_SERIAL, InterruptSource::Serial);
                 }
@@ -1860,6 +1896,8 @@ impl Machine {
 
             self.clocks.cycles += step_cpu as u64;
 
+            self.apu
+                .sync_divider_phase(self.timer.divider_counter(), self.cgb_double_speed);
             if self.timer.tick_fast(step_cpu) {
                 self.request_interrupt(INT_TIMER, InterruptSource::Timer);
             }
@@ -2021,10 +2059,21 @@ impl Machine {
 
     // Require an armed CGB switch, toggle speed and consume the arm. Add the modeled
     // 8200-cycle freeze to both the freeze counter and pending CPU stall budget.
+    fn reset_divider(&mut self) {
+        self.pending_apu_trace.extend(
+            self.apu
+                .reset_divider(self.timer.divider_counter(), self.cgb_double_speed),
+        );
+        let mut trace = Vec::new();
+        self.timer.write_div(&mut trace);
+        self.pending_io_trace
+            .extend(trace.into_iter().map(IoTraceEvent::Timer));
+    }
     fn perform_speed_switch(&mut self) {
         if self.mode != HardwareMode::Cgb || !self.cgb_speed_switch_armed {
             return;
         }
+        self.reset_divider();
         self.cgb_speed_switch_armed = false;
         self.cgb_double_speed = !self.cgb_double_speed;
         self.cgb_speed_switch_freeze_cycles = self
@@ -2348,7 +2397,11 @@ impl Machine {
 
     // Use the ordinary register/(HL) bus write path for CB results; memory restrictions still apply.
     fn write_r8_cb(&mut self, index: u8, value: u8) {
+        if index & 7 == 6 {
+            self.write8_timed(self.cpu.hl(), value, 12);
+        } else {
         self.write_r8(index, value);
+        }
     }
 
     // Rotate bit 7 into bit 0 and carry; CB rotations set Z from the result and clear N/H.
@@ -2444,6 +2497,9 @@ impl Machine {
     // include the CB prefix; (HL) costs 12 for BIT and 16 for read-modify-write operations.
     fn execute_cb_opcode(&mut self, opcode: u8) -> u32 {
         let target = opcode & 0x07;
+        if target == 6 && audio_timing::is_audio_io(self.cpu.hl()) {
+            self.advance_to_audio_io(8);
+        }
         let group = opcode >> 6;
         let y = (opcode >> 3) & 0x07;
         match group {
@@ -2565,7 +2621,7 @@ impl Machine {
                 Ok(12)
             }
             0x02 => {
-                self.write8(self.ld_bc(), self.cpu.a);
+                self.write8_timed(self.ld_bc(), self.cpu.a, 4);
                 Ok(8)
             }
             0x03 => {
@@ -2640,8 +2696,8 @@ impl Machine {
             0x08 => {
                 let addr = self.read16_imm();
                 let sp = self.cpu.sp;
-                self.write8(addr, sp as u8);
-                self.write8(addr.wrapping_add(1), (sp >> 8) as u8);
+                self.write8_timed(addr, sp as u8, 12);
+                self.write8_timed(addr.wrapping_add(1), (sp >> 8) as u8, 16);
                 Ok(20)
             }
             0x11 => {
@@ -2650,7 +2706,7 @@ impl Machine {
                 Ok(12)
             }
             0x12 => {
-                self.write8(self.ld_de(), self.cpu.a);
+                self.write8_timed(self.ld_de(), self.cpu.a, 4);
                 Ok(8)
             }
             0x13 => {
@@ -2746,7 +2802,7 @@ impl Machine {
             // LD (HL+),A writes at the old HL address, then increments the pair with wrapping.
             0x22 => {
                 let addr = self.cpu.hl();
-                self.write8(addr, self.cpu.a);
+                self.write8_timed(addr, self.cpu.a, 4);
                 self.cpu.set_hl(addr.wrapping_add(1));
                 Ok(8)
             }
@@ -2836,7 +2892,7 @@ impl Machine {
             // LD (HL-),A writes before decrementing HL; the matching load also reads first.
             0x32 => {
                 let addr = self.cpu.hl();
-                self.write8(addr, self.cpu.a);
+                self.write8_timed(addr, self.cpu.a, 4);
                 self.cpu.set_hl(addr.wrapping_sub(1));
                 Ok(8)
             }
@@ -2857,22 +2913,22 @@ impl Machine {
             // INC/DEC (HL) use bus reads and writes, with the same flags as register INC/DEC.
             0x34 => {
                 let addr = self.cpu.hl();
-                let value = self.read8(addr);
+                let value = self.read8_audio_timed(addr, 4);
                 let result = self.inc8(value);
-                self.write8(addr, result);
+                self.write8_timed(addr, result, 8);
                 Ok(12)
             }
             0x35 => {
                 let addr = self.cpu.hl();
-                let value = self.read8(addr);
+                let value = self.read8_audio_timed(addr, 4);
                 let result = self.dec8(value);
-                self.write8(addr, result);
+                self.write8_timed(addr, result, 8);
                 Ok(12)
             }
             0x36 => {
                 let value = self.read8(self.cpu.pc);
                 self.cpu.pc = self.cpu.pc.wrapping_add(1);
-                self.write8(self.cpu.hl(), value);
+                self.write8_timed(self.cpu.hl(), value, 8);
                 Ok(12)
             }
             // SCF sets carry and clears N/H without changing Z.
@@ -3572,7 +3628,7 @@ impl Machine {
             0xE0 => {
                 let offset = self.read8(self.cpu.pc) as u16;
                 self.cpu.pc = self.cpu.pc.wrapping_add(1);
-                self.write8(0xFF00 | offset, self.cpu.a);
+                self.write8_timed(0xFF00 | offset, self.cpu.a, 8);
                 Ok(12)
             }
             0xE1 => {
@@ -3581,7 +3637,7 @@ impl Machine {
                 Ok(12)
             }
             0xE2 => {
-                self.write8(0xFF00 | self.cpu.c as u16, self.cpu.a);
+                self.write8_timed(0xFF00 | self.cpu.c as u16, self.cpu.a, 4);
                 Ok(8)
             }
             0xE5 => {
@@ -3590,7 +3646,7 @@ impl Machine {
             }
             0xEA => {
                 let addr = self.read16_imm();
-                self.write8(addr, self.cpu.a);
+                self.write8_timed(addr, self.cpu.a, 12);
                 Ok(16)
             }
             0xE6 => {
@@ -3841,7 +3897,11 @@ mod tests {
     fn masked_interrupt_preserves_halt_until_enabled_in_both_execution_paths() {
         for (cgb, double_speed) in [(false, false), (true, false), (true, true)] {
             for fast in [false, true] {
-                let mut machine = if cgb { make_cgb_machine(&[0x76]) } else { make_machine(&[0x76]) };
+                let mut machine = if cgb {
+                    make_cgb_machine(&[0x76])
+                } else {
+                    make_machine(&[0x76])
+                };
                 machine.cgb_double_speed = double_speed;
                 machine.cpu.ime = true;
                 machine.interrupt.ie = 0;
@@ -4291,9 +4351,14 @@ mod tests {
             machine.set_diagnostic_events_enabled(true);
             machine.write8(0xFF51, 0xC0);
             machine.write8(0xFF55, control);
-            assert_eq!(machine.diagnostic_events().iter().any(|event| {
-                event.event_type == "HDMA_TRANSFER_DURING_UNSAFE_MODE"
-            }), expected, "LY={ly}, dot={dot}, control={control:#x}");
+            assert_eq!(
+                machine
+                    .diagnostic_events()
+                    .iter()
+                    .any(|event| { event.event_type == "HDMA_TRANSFER_DURING_UNSAFE_MODE" }),
+                expected,
+                "LY={ly}, dot={dot}, control={control:#x}"
+            );
         }
         let mut machine = make_cgb_machine(&[0x00]);
         machine.ppu.lcdc = 0x91;
@@ -4796,6 +4861,7 @@ mod tests {
     // Trigger channel 1 with a one-step length counter and check its expiry event.
     fn apu_length_expiry_is_observable() {
         let mut machine = make_machine(&[0x00]);
+        machine.write8(0xFF26, 0);
         machine.write8(0xFF26, 0x80);
         machine.write8(0xFF11, 0xFF);
         machine.write8(0xFF12, 0xF3);

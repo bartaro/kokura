@@ -1,5 +1,7 @@
 # KOKURA
 
+[2026-11-14 source update / 最新ソースの変更点](APU_ACCURACY.md) · [Verification / 検証](SOURCE_UPDATE_20261114.md). Existing prebuilt executables retain their recorded revisions; rebuild for the updated APU. 同梱実行ファイルの版はビルド記録を参照し、今回の更新を利用する場合はソースからビルドしてください。
+
 <!-- readme-language-links:start -->
 [English](README.md#english) | [日本語](README.md#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | **繁體中文** | [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md)
 <!-- readme-language-links:end -->

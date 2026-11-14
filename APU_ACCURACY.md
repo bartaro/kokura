@@ -1,46 +1,49 @@
-# APU accuracy update: 2026-10-29
+# APU accuracy update: 2026-11-14
 
-The core and CLI now include these independently implemented corrections:
+The CLI, C API and Python interface share the updated Rust core. GBSEQ vendors
+the same APU implementation for playback, keyboard monitoring and WAV export.
+Native PCM remains 65,536 Hz stereo; no new external dependency is required.
 
-- Pulse retrigger preserves the duty sequencer phase. Only the first duty step
-  after APU power-up is suppressed.
-- Sweep pace zero does not update pitch. Period writes do not overwrite the
-  trigger-latched sweep shadow, and a sweep update preserves divider phase.
-  A zero shift still performs the overflow check without writing the period.
-- The documented zero-pace, increasing-envelope volume-step technique works
-  on pulse and noise channels. Other model-dependent zombie cases are unchanged.
-- Sound-register reads apply hardware masks. Powered-off register writes are
-  ignored, except for DMG length counters; CGB length writes are ignored.
-- The DMG/CGB high-pass charge factors account for all 64 T-cycles in one
-  65,536 Hz PCM sample. Constants are evaluated at compile time, not per sample.
+- Pulse, wave and noise outputs are integrated over their timer intervals.
+  Long-period noise counters retain their full range.
+- DIV falling edges clock the APU sequencer, including DIV writes and CPU
+  speed switching. Timer and APU events are ordered within CPU bus execution.
+- CH3 models fetch/latch and retrigger behavior, DMG RAM access windows and
+  retrigger corruption, with separate CGB access behavior.
+- Length enable/trigger edges apply the extra phase-dependent clock. Live
+  envelope writes retain countdown state; supported CGB live-volume rules,
+  stopped envelopes and trigger-latched sweep enable are covered by tests.
+- CLI WAV tests cover restored queued audio, inclusive frame ranges across
+  input segments, and powered-off silence with the correct duration.
 
-No dependencies or serialized APU fields were added. The existing state format
-is retained. CLI, C API, Python API and private frontends use the shared core.
+Save-state version remains 7. Fields reused for APU control latches carry a
+marker; older unmarked states infer missing history once. They cannot recover
+exact trigger history that was never serialized. A fresh trigger establishes
+the new latches. This does not claim complete hardware-revision accuracy.
 
-## Regression coverage
+## 日本語
 
-Fourteen focused tests cover phase, sweep, envelopes, masks, power-off behavior,
-DC rejection, stereo tone output, and identical traced/fast PCM generation.
-Eleven of these tests failed on the previous implementation and pass after the
-changes. The existing DC-input test now checks DC rejection rather than treating
-constant input as a sustained musical tone.
+KOKURA-CLIの共通音源を更新しました。DIVとAPUの同期、CH3の波形読み出し・再トリガー、
+長さカウンター、演奏中のエンベロープ・スイープ書き換えを改善し、音声区間の積分から
+65,536 HzのステレオPCMを生成します。GBSEQも同じAPUを内蔵します。
+ステート形式はバージョン7を維持しますが、古いステートに保存されていなかった
+過去のトリガー状態は推定となります。実機の全リビジョンへの完全一致を意味しません。
 
-Run the portable audio tests with:
+## Reproduce the checks
 
 ```sh
-cargo test --locked -p kokura-core --lib apu::
+cargo test --locked -p kokura-core -p kokura-debug -p kokura-bridge -p kokura-cli -p kokura-capi --lib --bins
+cargo build --locked --release -p kokura-cli
 ```
 
-These are bounded software checks, not physical-hardware or listening proof.
-Instruction-boundary timing, model-specific envelope behavior, exact DIV/APU
-coupling, long-period noise counters and band-limited synthesis still need work.
-This update does not claim complete APU conformance or eliminate every host
-audio underrun. See `BINARY_BUILD.json` and `NATIVE_BINARIES.json` for the exact
-source and executable validation records.
+See [source verification](SOURCE_UPDATE_20261114.md) and the implementation records:
 
-## References
+- [Sample integration and noise range](docs/audio_accuracy_validation_20261113.md)
+- [DIV and CH3 timing](docs/audio_timing_validation_20261114.md)
+- [Live audio-register writes](docs/audio_register_writes_validation_20261114.md)
 
-- [Pan Docs: audio details](https://github.com/gbdev/pandocs/blob/master/src/Audio_details.md)
-- [Pan Docs: audio registers](https://github.com/gbdev/pandocs/blob/master/src/Audio_Registers.md)
-
-No emulator implementation code was copied into this update.
+The dated implementation records describe earlier local tests, including local
+recording fixtures; the source verification records checks of this public tree.
+These automated checks do not establish physical-console or listening validation.
+Prebuilt executables retain the exact source revisions in `BINARY_BUILD.json`
+and `NATIVE_BINARIES.json`; rebuild to use this source update.

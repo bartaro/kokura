@@ -1,5 +1,7 @@
 # KOKURA
 
+[2026-11-14 source update / 最新ソースの変更点](APU_ACCURACY.md) · [Verification / 検証](SOURCE_UPDATE_20261114.md). Existing prebuilt executables retain their recorded revisions; rebuild for the updated APU. 同梱実行ファイルの版はビルド記録を参照し、今回の更新を利用する場合はソースからビルドしてください。
+
 <!-- manual-language-links:start -->
 | Language / 言語 | HTML |
 | --- | --- |
@@ -26,8 +28,7 @@ GB/GBC emulator with CLI, tracing, debugging and Python/C interfaces.
 
 Public preview: APIs and behavior may change.
 
-The 2026-10-29 core update corrects pulse retrigger, sweep, envelope volume steps,
-register access and DMG/CGB output filtering. See [APU accuracy notes](APU_ACCURACY.md).
+The 2026-11-14 source update improves DIV/APU timing, CH3 fetches, live register writes and PCM integration. See [APU accuracy notes](APU_ACCURACY.md).
 
 ### Prebuilt Windows CLI
 

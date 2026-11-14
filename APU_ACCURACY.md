@@ -45,5 +45,6 @@ See [source verification](SOURCE_UPDATE_20261114.md) and the implementation reco
 The dated implementation records describe earlier local tests, including local
 recording fixtures; the source verification records checks of this public tree.
 These automated checks do not establish physical-console or listening validation.
-Prebuilt executables retain the exact source revisions in `BINARY_BUILD.json`
-and `NATIVE_BINARIES.json`; rebuild to use this source update.
+[Native executables updated 2026-11-15](bin/README.md) include this source update
+on Windows x86_64, Linux x86_64 and macOS ARM64/Intel. `BINARY_BUILD.json`
+and `NATIVE_BINARIES.json` record the exact source revision, hashes and native checks.

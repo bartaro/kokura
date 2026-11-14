@@ -1,12 +1,8 @@
 {
-  "built_on": "2026-10-29",
+  "built_on": "2026-11-15",
   "licensor": "DAISUKE OBA",
   "configuration": "Release",
-  "build_command": ".\\scripts\\build.ps1 -Offline",
-  "build_exit_code": 0,
-  "source_revision_before_packaging": "f0bf7aeb78786225e472d401c04a41d6585c37bc",
-  "source_state": "Committed public source; source_inputs identify exact Rust and build inputs.",
-  "source_inventory_scope": "Public Rust workspace and build scripts; executable links the CLI dependency closure.",
+  "source_revision_before_packaging": "567d9515cec8dd718655e003253d4db5cfcc30f4",
   "source_inputs": [
     {
       "path": "Cargo.lock",
@@ -98,7 +94,7 @@
     },
     {
       "path": "crates/kokura-cli/src/run.rs",
-      "sha256": "152e1d9f549e67620ac1972def577cd512580aa2aa70bbc0c6e7601489af8340"
+      "sha256": "c2d60ce1545428f35c42e1ef077498e9da82aac697b6ca4813a8a537b95453c1"
     },
     {
       "path": "crates/kokura-core/Cargo.toml",
@@ -122,11 +118,23 @@
     },
     {
       "path": "crates/kokura-core/src/apu.rs",
-      "sha256": "aab4922e058c666cd65f4fc18ff9f2003cb81480c5a78fe16fda5276eeb8d4eb"
+      "sha256": "7de2ff5d0c7736df6787fc4a697e4a06b3532734ea66225b4fa7755c2315cccb"
     },
     {
       "path": "crates/kokura-core/src/apu/accuracy_tests.rs",
-      "sha256": "b948c7f079bf6ef5f7f118f24336cbbdbb343efbf05ff658bf5b853b691e498e"
+      "sha256": "998a0c460c6b847a0a468196636acf8dd58c2b5b7ba6eeb20597a2b34022c1c8"
+    },
+    {
+      "path": "crates/kokura-core/src/apu/register_write_tests.rs",
+      "sha256": "7bece0b0075293b30ff3b1548c7f178d653c3df5a73c0bdd48ecf1b58541fa1e"
+    },
+    {
+      "path": "crates/kokura-core/src/audio_timing.rs",
+      "sha256": "a946893576829647dfd35ac1f024581a142e197f5f5086bc7a6542bb6a16944f"
+    },
+    {
+      "path": "crates/kokura-core/src/audio_timing/tests.rs",
+      "sha256": "03557388eda5d9ac1b4c6498844bf311b971f0becf344ce5003df7fbea2f71ba"
     },
     {
       "path": "crates/kokura-core/src/bus.rs",
@@ -190,7 +198,7 @@
     },
     {
       "path": "crates/kokura-core/src/lib.rs",
-      "sha256": "980dace5536b116811834e69a2eb0b73f922a062731348bedc811d16cebdfd7c"
+      "sha256": "53ba63c5e9cb2d503034fa71cb2043a69d30597112ff73207ed87a0fad87b71b"
     },
     {
       "path": "crates/kokura-core/src/mbc/camera.rs",
@@ -270,7 +278,7 @@
     },
     {
       "path": "crates/kokura-core/src/timer.rs",
-      "sha256": "eea816046bb40564e2cda4e1e6c7f4138f1369b8b6446161af2aaa029e30526f"
+      "sha256": "88c1c01334dde39fde0ff38c8df7b7b549751ad36778769e3dc6b5a65990e65c"
     },
     {
       "path": "crates/kokura-core/src/types.rs",
@@ -339,104 +347,187 @@
     {
       "path": "crates/kokura-py/src/lib.rs",
       "sha256": "491ee5565327b2d421e2dd610d7d4abaa8584ca341231735f615544eba1056ce"
-    },
-    {
-      "path": "scripts/build.ps1",
-      "sha256": "3a6a74813d2321dcb4677361c2ac7c0e5ef809c39f5aa55ac9931b08b0b7a679"
     }
   ],
+  "source_inventory_scope": "Tracked public Rust workspace; CLI dependency closure built and packaged",
+  "build_command": [
+    "cargo",
+    "build",
+    "--locked",
+    "--release",
+    "--target",
+    "x86_64-pc-windows-msvc",
+    "-p",
+    "kokura-cli",
+    "--bin",
+    "kokura-cli"
+  ],
+  "build_exit_code": 0,
+  "target": "x86_64-pc-windows-msvc",
+  "rustflags": "-C target-feature=+crt-static",
+  "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-pc-windows-msvc\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+  "cargo_lock_sha256": "ecad5e5636b70117b1bb2cde3d420b1f9df6732e84f5c7cdf3dd8f5dfd15e0ca",
+  "ci_run": "https://github.com/bartaro/kokura/actions/runs/43612265492",
   "binary": {
     "path": "kokura-cli.exe",
-    "bytes": 5793792,
-    "sha256": "0b3810f9501c7279dc0a0338a0f9a93fc16caba5677ef3ea4ce5fead58f5d659",
+    "bytes": 5811200,
+    "sha256": "69affaa57c988b6cb7e6a13ad878ea5fec0ffd40566b9d69aa9e9b213bf38f9a",
+    "format": "PE32+ x86_64",
     "imported_system_dlls": [
-      "api-ms-win-core-synch-l1-2-0.dll",
       "kernel32.dll",
+      "api-ms-win-core-synch-l1-2-0.dll",
+      "KERNEL32.dll",
       "ntdll.dll"
-    ]
+    ],
+    "external_C_or_Python_runtime_required": false
   },
   "checks": [
     {
-      "check": "Public workspace tests",
-      "tests_passed": 256,
-      "ignored": 1,
-      "command": "cargo test --workspace --locked --offline",
-      "passed": true,
-      "caveat": "Optional external-ROM scenarios are not established by the count."
-    },
-    {
-      "check": "APU regressions",
-      "tests_passed": 29,
-      "new_tests": 14,
-      "passed": true
-    },
-    {
-      "check": "Scoped rustfmt",
-      "path": "crates/kokura-core/src/apu.rs and its test module",
-      "passed": true
-    },
-    {
-      "check": "Workspace fmt",
-      "passed": false,
-      "reason": "Existing formatting differences in CLI tests, core examples/tests and debug events are outside this audio change."
-    },
-    {
-      "check": "CLI --help",
+      "name": "tests",
+      "arguments": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "kokura-core",
+        "-p",
+        "kokura-debug",
+        "-p",
+        "kokura-bridge",
+        "-p",
+        "kokura-cli",
+        "-p",
+        "kokura-capi",
+        "--lib",
+        "--bins",
+        "--",
+        "--quiet"
+      ],
       "exit_code": 0
     },
     {
-      "check": "Static CRT import inspection",
+      "name": "release",
+      "arguments": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "-p",
+        "kokura-cli",
+        "--bin",
+        "kokura-cli"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "cli-help",
+      "arguments": [
+        "D:\\a\\kokura\\kokura\\dist\\windows-x86_64\\kokura-cli.exe",
+        "--help"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "dmg-audio",
+      "arguments": [
+        "D:\\a\\kokura\\kokura\\dist\\windows-x86_64\\kokura-cli.exe",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\dmg.gb",
+        "--hardware",
+        "dmg",
+        "--run-frames",
+        "60",
+        "--record-wav",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\dmg.wav",
+        "--save-state",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\dmg.state",
+        "--dump-report",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\dmg.json",
+        "--report-minimal",
+        "summary"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "dmg-resume",
+      "arguments": [
+        "D:\\a\\kokura\\kokura\\dist\\windows-x86_64\\kokura-cli.exe",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\dmg.gb",
+        "--hardware",
+        "dmg",
+        "--load-state",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\dmg.state",
+        "--run-frames",
+        "30",
+        "--record-wav",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\dmg-resumed.wav"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "cgb-audio",
+      "arguments": [
+        "D:\\a\\kokura\\kokura\\dist\\windows-x86_64\\kokura-cli.exe",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\cgb.gb",
+        "--hardware",
+        "cgb",
+        "--run-frames",
+        "60",
+        "--record-wav",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\cgb.wav",
+        "--save-state",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\cgb.state",
+        "--dump-report",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\cgb.json",
+        "--report-minimal",
+        "summary"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "cgb-resume",
+      "arguments": [
+        "D:\\a\\kokura\\kokura\\dist\\windows-x86_64\\kokura-cli.exe",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\cgb.gb",
+        "--hardware",
+        "cgb",
+        "--load-state",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\cgb.state",
+        "--run-frames",
+        "30",
+        "--record-wav",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kokura-native-vsm1dmst\\cgb-resumed.wav"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "native_smoke_checks": [
+    {
+      "case": "dmg-audio",
+      "passed": true,
+      "pcm_frames": 65835,
+      "sample_rate": 65536,
+      "peak": 22600,
+      "pcm_sha256": "e876a7cd804c25219e23ed8d095142f478b70337047bc2c7c49dfbb78186a146"
+    },
+    {
+      "case": "dmg-state-resume",
       "passed": true
     },
     {
-      "check": "old-state-cgb_noise",
-      "passed": true
+      "case": "cgb-audio",
+      "passed": true,
+      "pcm_frames": 65835,
+      "sample_rate": 65536,
+      "peak": 26119,
+      "pcm_sha256": "e68e4230abb80ac103c8b43ec79fd06a2a3a891dc9c7281e7b35fc9c2c187f88"
     },
     {
-      "check": "old-state-cgb_wave",
-      "passed": true
-    },
-    {
-      "check": "old-state-cgb_zero_pace_pulse",
-      "passed": true
-    },
-    {
-      "check": "old-state-dmg_noise",
-      "passed": true
-    },
-    {
-      "check": "old-state-dmg_wave",
-      "passed": true
-    },
-    {
-      "check": "old-state-dmg_zero_pace_pulse",
-      "passed": true
-    },
-    {
-      "check": "six-synthetic-audio-recordings",
-      "passed": true
-    },
-    {
-      "check": "link16_cable",
-      "passed": true
-    },
-    {
-      "check": "link16_cable-resume",
-      "passed": true
-    },
-    {
-      "check": "ressen",
-      "passed": true
-    },
-    {
-      "check": "ressen-resume",
+      "case": "cgb-state-resume",
       "passed": true
     }
   ],
-  "target": "x86_64-pc-windows-msvc",
-  "rustflags": "-C target-feature=+crt-static",
-  "cargo_lock_sha256": "ecad5e5636b70117b1bb2cde3d420b1f9df6732e84f5c7cdf3dd8f5dfd15e0ca",
-  "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-pc-windows-msvc\nrelease: 1.93.1\nLLVM version: 21.1.8",
-  "dependency_notices": "Cargo.lock and bundled dependency notices unchanged; no dependencies added.",
-  "scope": "CLI/core/API only. Bounded software tests, PCM recordings and state decoding; no physical-hardware or human-listening certification."
+  "scope": "Windows x64 CLI; native automated checks, no physical hardware/listening claim"
 }

@@ -1,0 +1,203 @@
+{
+  "published_on": "2026-11-15",
+  "source_commit": "567d9515cec8dd718655e003253d4db5cfcc30f4",
+  "ci_run": "https://github.com/bartaro/kokura/actions/runs/43612265492",
+  "binaries": [
+    {
+      "path": "bin/macos-arm64/kokura-cli",
+      "sha256": "612dc2e3b3ff04891137871853c1e1b9104d656892918e5707e0208da9d19b00",
+      "bytes": 5263904,
+      "source_commit": "567d9515cec8dd718655e003253d4db5cfcc30f4",
+      "source_repository": "https://github.com/bartaro/kokura",
+      "system": "Darwin",
+      "machine": "arm64",
+      "platform": "macos-arm64",
+      "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: aarch64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+      "test_count": 304,
+      "native_execution_verified": true,
+      "executable_dependencies": "/Users/runner/work/kokura/kokura/dist/macos-arm64/kokura-cli:\n\t/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)\n\t/usr/lib/libbz2.1.0.dylib (compatibility version 1.0.0, current version 1.0.8)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)\n",
+      "format_verification": {
+        "format": "Mach-O64 arm64",
+        "macos_deployment_targets": [
+          "11.0.0"
+        ]
+      },
+      "native_smoke_checks": [
+        {
+          "case": "dmg-audio",
+          "passed": true,
+          "pcm_frames": 65835,
+          "sample_rate": 65536,
+          "peak": 22600,
+          "pcm_sha256": "e876a7cd804c25219e23ed8d095142f478b70337047bc2c7c49dfbb78186a146"
+        },
+        {
+          "case": "dmg-state-resume",
+          "passed": true
+        },
+        {
+          "case": "cgb-audio",
+          "passed": true,
+          "pcm_frames": 65835,
+          "sample_rate": 65536,
+          "peak": 26119,
+          "pcm_sha256": "e68e4230abb80ac103c8b43ec79fd06a2a3a891dc9c7281e7b35fc9c2c187f88"
+        },
+        {
+          "case": "cgb-state-resume",
+          "passed": true
+        }
+      ],
+      "verified_original_archive_sha256": "f537e1aa35b05941bf9c5ec48ad3700a671b3d70f8e8c563807469537afd9287",
+      "github_artifact_digest": "sha256:f537e1aa35b05941bf9c5ec48ad3700a671b3d70f8e8c563807469537afd9287"
+    },
+    {
+      "path": "kokura-cli.exe",
+      "sha256": "69affaa57c988b6cb7e6a13ad878ea5fec0ffd40566b9d69aa9e9b213bf38f9a",
+      "bytes": 5811200,
+      "source_commit": "567d9515cec8dd718655e003253d4db5cfcc30f4",
+      "source_repository": "https://github.com/bartaro/kokura",
+      "system": "Windows",
+      "machine": "AMD64",
+      "platform": "windows-x86_64",
+      "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-pc-windows-msvc\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+      "test_count": 304,
+      "native_execution_verified": true,
+      "executable_dependencies": "",
+      "format_verification": {
+        "format": "PE32+ x86_64",
+        "imported_system_dlls": [
+          "kernel32.dll",
+          "api-ms-win-core-synch-l1-2-0.dll",
+          "KERNEL32.dll",
+          "ntdll.dll"
+        ],
+        "external_C_or_Python_runtime_required": false
+      },
+      "native_smoke_checks": [
+        {
+          "case": "dmg-audio",
+          "passed": true,
+          "pcm_frames": 65835,
+          "sample_rate": 65536,
+          "peak": 22600,
+          "pcm_sha256": "e876a7cd804c25219e23ed8d095142f478b70337047bc2c7c49dfbb78186a146"
+        },
+        {
+          "case": "dmg-state-resume",
+          "passed": true
+        },
+        {
+          "case": "cgb-audio",
+          "passed": true,
+          "pcm_frames": 65835,
+          "sample_rate": 65536,
+          "peak": 26119,
+          "pcm_sha256": "e68e4230abb80ac103c8b43ec79fd06a2a3a891dc9c7281e7b35fc9c2c187f88"
+        },
+        {
+          "case": "cgb-state-resume",
+          "passed": true
+        }
+      ],
+      "verified_original_archive_sha256": "d9912d59bda5935a1429fd9321b1226398edf91a47f9b28462c251ee8f4c7a43",
+      "github_artifact_digest": "sha256:d9912d59bda5935a1429fd9321b1226398edf91a47f9b28462c251ee8f4c7a43"
+    },
+    {
+      "path": "bin/linux-x86_64/kokura-cli",
+      "sha256": "29009bf9f03a2bff25f04b5e5c7754587b189c459bad9c9fee7d0a79e81a30b0",
+      "bytes": 6579368,
+      "source_commit": "567d9515cec8dd718655e003253d4db5cfcc30f4",
+      "source_repository": "https://github.com/bartaro/kokura",
+      "system": "Linux",
+      "machine": "x86_64",
+      "platform": "linux-x86_64",
+      "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-unknown-linux-gnu\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+      "test_count": 304,
+      "native_execution_verified": true,
+      "executable_dependencies": "\tlinux-vdso.so.1 (0x00007f22f9052000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f22f9012000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f22f8600000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f22f9054000)\n",
+      "format_verification": {
+        "format": "ELF64 x86_64",
+        "highest_glibc_symbol_version": "GLIBC_2.34"
+      },
+      "native_smoke_checks": [
+        {
+          "case": "dmg-audio",
+          "passed": true,
+          "pcm_frames": 65835,
+          "sample_rate": 65536,
+          "peak": 22600,
+          "pcm_sha256": "e876a7cd804c25219e23ed8d095142f478b70337047bc2c7c49dfbb78186a146"
+        },
+        {
+          "case": "dmg-state-resume",
+          "passed": true
+        },
+        {
+          "case": "cgb-audio",
+          "passed": true,
+          "pcm_frames": 65835,
+          "sample_rate": 65536,
+          "peak": 26119,
+          "pcm_sha256": "e68e4230abb80ac103c8b43ec79fd06a2a3a891dc9c7281e7b35fc9c2c187f88"
+        },
+        {
+          "case": "cgb-state-resume",
+          "passed": true
+        }
+      ],
+      "verified_original_archive_sha256": "a55cf307281fc30c5e50fded14001e6d5999f8267903f4b876a24875afbc4460",
+      "github_artifact_digest": "sha256:a55cf307281fc30c5e50fded14001e6d5999f8267903f4b876a24875afbc4460"
+    },
+    {
+      "path": "bin/macos-x86_64/kokura-cli",
+      "sha256": "6ccfdffdf1978b4286b0a4670add2a39a4174a8a254a067d63453663d7528cc0",
+      "bytes": 5726844,
+      "source_commit": "567d9515cec8dd718655e003253d4db5cfcc30f4",
+      "source_repository": "https://github.com/bartaro/kokura",
+      "system": "Darwin",
+      "machine": "x86_64",
+      "platform": "macos-x86_64",
+      "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+      "test_count": 304,
+      "native_execution_verified": true,
+      "executable_dependencies": "/Users/runner/work/kokura/kokura/dist/macos-x86_64/kokura-cli:\n\t/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)\n\t/usr/lib/libbz2.1.0.dylib (compatibility version 1.0.0, current version 1.0.8)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)\n",
+      "format_verification": {
+        "format": "Mach-O64 x86_64",
+        "macos_deployment_targets": [
+          "10.12.0"
+        ]
+      },
+      "native_smoke_checks": [
+        {
+          "case": "dmg-audio",
+          "passed": true,
+          "pcm_frames": 65835,
+          "sample_rate": 65536,
+          "peak": 22600,
+          "pcm_sha256": "e876a7cd804c25219e23ed8d095142f478b70337047bc2c7c49dfbb78186a146"
+        },
+        {
+          "case": "dmg-state-resume",
+          "passed": true
+        },
+        {
+          "case": "cgb-audio",
+          "passed": true,
+          "pcm_frames": 65835,
+          "sample_rate": 65536,
+          "peak": 26119,
+          "pcm_sha256": "e68e4230abb80ac103c8b43ec79fd06a2a3a891dc9c7281e7b35fc9c2c187f88"
+        },
+        {
+          "case": "cgb-state-resume",
+          "passed": true
+        }
+      ],
+      "verified_original_archive_sha256": "3fc17a581608a07bda125f8a5b0d437a027b1a6c6cc2b436480dd2249d83645a",
+      "github_artifact_digest": "sha256:3fc17a581608a07bda125f8a5b0d437a027b1a6c6cc2b436480dd2249d83645a"
+    }
+  ],
+  "physical_hardware_tested": false,
+  "human_listening_tested": false
+}

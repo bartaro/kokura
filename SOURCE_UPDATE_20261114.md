@@ -1,5 +1,7 @@
 # Source update — 2026-11-14
 
+**Follow-up, 2026-11-15:** [All four native CLI binaries](bin/README.md) now include this update. See [binary verification](BINARY_UPDATE_20261115.md).
+
 Compared the current local KOKURA CLI dependency sources with GitHub `main`
 (`8f6235b`). Integrated the APU interval mixer, DIV/frame-sequencer and CH3
 timing, live envelope/length/sweep behavior and CLI WAV regression tests.

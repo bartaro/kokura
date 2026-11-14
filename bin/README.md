@@ -1,5 +1,13 @@
 # KOKURA native CLI
 
+Updated 2026-11-15 from public source `567d951`. Windows x86_64, Linux x86_64, macOS ARM64 and Intel each passed 304 tests plus native DMG/CGB WAV recording and save-state/resume checks.
+
+2026-11-15更新。4環境とも最新APUを含み、各304件のテストとDMG/CGBの録音・ステート再開の自動検証を通過しています。
+
+[Windows x64 executable](../kokura-cli.exe) · [SHA-256 checksums](SHA256SUMS) · [Build details](../BINARY_UPDATE_20261115.md)
+
+The Windows file is at the repository root. Keep the license notices with redistributed binaries. Physical-console and human-listening checks were not performed.
+
 
 <!-- native-platform-binaries-20261004-en -->
 ### Prebuilt Linux and macOS CLI

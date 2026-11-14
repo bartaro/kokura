@@ -1,0 +1,43 @@
+name: Native CLI distributions
+on:
+  workflow_dispatch:
+  push:
+    paths: ['crates/**', 'Cargo.*', 'scripts/native_package.py', '.github/workflows/native-cli.yml']
+permissions:
+  contents: read
+jobs:
+  native:
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, platform: windows-x86_64, target: x86_64-pc-windows-msvc, macos: ''}
+          - {os: ubuntu-24.04, platform: linux-x86_64, target: x86_64-unknown-linux-gnu, macos: ''}
+          - {os: macos-15, platform: macos-arm64, target: aarch64-apple-darwin, macos: '11.0'}
+          - {os: macos-15-intel, platform: macos-x86_64, target: x86_64-apple-darwin, macos: '10.12'}
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: '1'
+      CARGO_TERM_COLOR: never
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
+    steps:
+      - name: Preserve source bytes
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Rust
+        run: |
+          rustup toolchain install 1.93.1 --profile minimal
+          rustup default 1.93.1
+      - name: Test, build and execute native CLI
+        run: python scripts/native_package.py --platform ${{ matrix.platform }} --target ${{ matrix.target }}
+      - name: Upload verified CLI
+        uses: actions/upload-artifact@v4
+        with:
+          name: kokura-${{ matrix.platform }}
+          path: dist/${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 30

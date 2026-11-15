@@ -1,10 +1,6 @@
 # KOKURA
 
-[2026-11-14 source update / 最新ソースの変更点](APU_ACCURACY.md) · [Verification / 検証](SOURCE_UPDATE_20261114.md). [Native binaries updated 2026-11-15 / 配布バイナリ更新](bin/README.md): Windows x86_64, Linux x86_64, macOS Apple Silicon / Intel. All four include this APU update.
-
-<!-- readme-language-links:start -->
-[English](README.md#english) | [日本語](README.md#japanese) | [한국어](README.ko.md) | **简体中文** | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md)
-<!-- readme-language-links:end -->
+[English](README.md#english) | [日本語](README.md#japanese) | [한국어](README.ko.md) | **简体中文** | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [Deutsch](README.de.md)
 
 [KOKURA 简体中文手册](https://bartaro.github.io/kitaq-docs/zh-CN/kokura.html)
 
@@ -20,33 +16,13 @@ GB/GBC模拟器，提供命令行操作、执行跟踪、调试及Python/C接口
 .\kokura-cli.exe --help
 ```
 
-如需只重新构建这个命令行工具，请运行 `.\scripts\build.ps1`，必要时添加 `-Offline`。脚本会将可执行文件复制到仓库根目录。详情请参阅[二进制构建记录](BINARY_BUILD.json)和[二进制依赖许可声明](BINARY_NOTICES.md)。
+如需只重新构建这个命令行工具，请运行 `.\scripts\build.ps1`，必要时添加 `-Offline`。脚本会将可执行文件复制到仓库根目录。详情请参阅[二进制依赖许可声明](BINARY_NOTICES.md)。
 
 项目自有代码的许可方为 **DAISUKE OBA**，采用MIT许可证。再分发时请一并提供 `LICENSE`、`LICENSE.ja`、`BINARY_NOTICES.md` 和 `licenses/` 目录。第三方库仍适用各自权利人的许可条件。
 
-## 从源码构建并开始使用
+## 预编译的Linux和macOS CLI
 
-重新构建需要近期稳定版Rust工具链。Windows还需要安装Visual Studio Build Tools及“使用C++的桌面开发”工作负载。
-
-```powershell
-.\scripts\build.ps1
-.\kokura-cli.exe --help
-```
-
-## 手册与许可证
-
-- [简体中文手册](https://bartaro.github.io/kitaq-docs/zh-CN/kokura.html)
-- [英文手册](https://bartaro.github.io/kitaq-docs/en/kokura.html) / [日文手册](https://bartaro.github.io/kitaq-docs/kokura.html)
-- [供离线阅读的手册源码](https://github.com/bartaro/kitaq-docs)
-- [许可证](LICENSE) / [日文参考译文](LICENSE.ja)
-
-项目许可证不能替代第三方对依赖库、标志或商标规定的条件。再分发时请保留随附声明。
-
-
-<!-- native-platform-binaries-20261004-zh-CN -->
-### 预编译的Linux和macOS CLI
-
-经过GitHub Actions运行验证的CLI文件位于以下文件夹中。运行CLI无需安装Rust、Python或.NET。Linux版本面向x86_64/glibc；macOS请选择与CPU匹配的版本。
+运行CLI无需安装Rust、Python或.NET。Linux版本面向x86_64/glibc；macOS请选择与CPU匹配的版本。
 
 | OS / CPU | CLI |
 | --- | --- |
@@ -65,4 +41,29 @@ chmod +x bin/macos-x86_64/kokura-cli
 ./bin/macos-x86_64/kokura-cli --help
 ```
 
-请在仓库根目录执行命令。重新分发时请保留LICENSE、LICENSE.ja、BINARY_NOTICES.md和licenses/。NATIVE_BINARIES.json记录了哈希值、依赖项、源代码版本和原生运行验证结果。
+请在仓库根目录执行命令。重新分发时请保留LICENSE、LICENSE.ja、BINARY_NOTICES.md和licenses/。
+
+## 首次使用
+
+```powershell
+.\kokura-cli.exe game.gb --run-frames 120 --png screen.png
+```
+
+
+## 从源码构建并开始使用
+
+重新构建需要近期稳定版Rust工具链。Windows还需要安装Visual Studio Build Tools及“使用C++的桌面开发”工作负载。
+
+```powershell
+.\scripts\build.ps1
+.\kokura-cli.exe --help
+```
+
+## 手册与许可证
+
+- [简体中文手册](https://bartaro.github.io/kitaq-docs/zh-CN/kokura.html)
+- [英文手册](https://bartaro.github.io/kitaq-docs/en/kokura.html) / [日文手册](https://bartaro.github.io/kitaq-docs/kokura.html)
+- [供离线阅读的手册源码](https://github.com/bartaro/kitaq-docs)
+- [许可证](LICENSE) / [日文参考译文](LICENSE.ja)
+
+项目许可证不能替代第三方对依赖库、标志或商标规定的条件。再分发时请保留随附声明。

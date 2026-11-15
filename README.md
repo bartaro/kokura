@@ -1,24 +1,6 @@
 # KOKURA
 
-[2026-11-14 source update / 最新ソースの変更点](APU_ACCURACY.md) · [Verification / 検証](SOURCE_UPDATE_20261114.md). [Native binaries updated 2026-11-15 / 配布バイナリ更新](bin/README.md): Windows x86_64, Linux x86_64, macOS Apple Silicon / Intel. All four include this APU update.
-
-<!-- manual-language-links:start -->
-| Language / 言語 | HTML |
-| --- | --- |
-| English | [KOKURA](https://bartaro.github.io/kitaq-docs/en/kokura.html) |
-| 日本語 | [KOKURA](https://bartaro.github.io/kitaq-docs/kokura.html) |
-| 한국어 | [KOKURA](https://bartaro.github.io/kitaq-docs/ko/kokura.html) |
-| 简体中文 | [KOKURA](https://bartaro.github.io/kitaq-docs/zh-CN/kokura.html) |
-| 繁體中文 | [KOKURA](https://bartaro.github.io/kitaq-docs/zh-TW/kokura.html) |
-| Français | [KOKURA](https://bartaro.github.io/kitaq-docs/fr/kokura.html) |
-| Español | [KOKURA](https://bartaro.github.io/kitaq-docs/es/kokura.html) |
-| Deutsch | [KOKURA](https://bartaro.github.io/kitaq-docs/de/kokura.html) |
-<!-- manual-language-links:end -->
-
-
-<!-- readme-language-links:start -->
-**English** | [日本語](README.md#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md)
-<!-- readme-language-links:end -->
+**English** | [日本語](README.md#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [Deutsch](README.de.md)
 
 <a name="english"></a>
 
@@ -44,11 +26,41 @@ The native C runtime is linked statically; the program uses Windows system DLLs.
 Rebuild only this CLI with `.\scripts\build.ps1` (optionally `-Offline`).
 The script copies the executable to the repository root. GUI frontends, Python
 extension modules and C API DLLs are not part of this executable distribution.
-See [binary build record](BINARY_BUILD.json) and [binary dependency notices](BINARY_NOTICES.md).
+See [binary dependency notices](BINARY_NOTICES.md).
 
 The licensor of the independent project code is **DAISUKE OBA**, under MIT.
 When redistributing, include `LICENSE`, `LICENSE.ja`, `BINARY_NOTICES.md` and the `licenses/` directory.
 Third-party libraries retain their own copyright holders and terms.
+
+### Prebuilt Linux and macOS CLI
+
+Rust, Python and .NET are not required to run the CLI. The Linux build targets x86_64/glibc; choose the matching CPU for macOS.
+
+| OS / CPU | CLI |
+| --- | --- |
+| Linux x86_64 (glibc) | [bin/linux-x86_64/kokura-cli](bin/linux-x86_64/kokura-cli) |
+| macOS ARM64 | [bin/macos-arm64/kokura-cli](bin/macos-arm64/kokura-cli) |
+| macOS Intel | [bin/macos-x86_64/kokura-cli](bin/macos-x86_64/kokura-cli) |
+
+```sh
+chmod +x bin/linux-x86_64/kokura-cli
+./bin/linux-x86_64/kokura-cli --help
+
+chmod +x bin/macos-arm64/kokura-cli
+./bin/macos-arm64/kokura-cli --help
+
+chmod +x bin/macos-x86_64/kokura-cli
+./bin/macos-x86_64/kokura-cli --help
+```
+
+Run the commands from the repository root. For redistribution, retain LICENSE, LICENSE.ja, BINARY_NOTICES.md and licenses/.
+
+### First use
+
+```powershell
+.\kokura-cli.exe game.gb --run-frames 120 --png screen.png
+```
+
 
 ### Build and first use
 
@@ -66,16 +78,6 @@ A current stable Rust toolchain. On Windows, install Visual Studio Build Tools w
 - [License](LICENSE) / [Japanese reference translation](LICENSE.ja)
 
 The project license does not replace third-party dependency, logo or trademark terms. Preserve the accompanying notices when redistributing.
-
-### Public package scope
-
-This publication contains the emulator core, CLI and integration APIs. GUI frontends and the PLITA dependency are deferred and are not included in this repository snapshot.
-
-### GUI development policy
-
-KOKURA-GUI and KUROSAKI-GUI remain unpublished. Future GUI work uses PLITA;
-SDL-GUI and egui-GUI are not planned for these projects. This repository
-continues to distribute the core, CLI and integration APIs.
 
 ---
 
@@ -100,9 +102,39 @@ DMG/CGBの出力フィルタを修正しました。[音源精度の変更点と
 
 このCLIだけを再ビルドするには `.\scripts\build.ps1` を実行します。必要に応じて `-Offline` を指定できます。スクリプトは実行ファイルをリポジトリ直下へコピーします。GUI、Python拡張モジュール、C APIのDLLは、この実行ファイルの配布には含めていません。
 
-[バイナリのビルド記録](BINARY_BUILD.json)と[バイナリの依存物に関する権利表記](BINARY_NOTICES.md)を参照してください。配布時は `LICENSE`、`LICENSE.ja`、`BINARY_NOTICES.md` と `licenses/` フォルダーも同梱してください。
+[バイナリの依存物に関する権利表記](BINARY_NOTICES.md)を参照してください。配布時は `LICENSE`、`LICENSE.ja`、`BINARY_NOTICES.md` と `licenses/` フォルダーも同梱してください。
 
 独自コードの著作権者・ライセンサーは **DAISUKE OBA** で、MITライセンスを適用しています。第三者のライブラリは、それぞれの著作権者と利用条件を保持します。
+
+### ビルド済みLinux・macOS CLI
+
+CLIの実行にRust・Python・.NETは不要です。Linux版はx86_64/glibc向けです。macOSではCPUに合う版を選んでください。
+
+| OS / CPU | CLI |
+| --- | --- |
+| Linux x86_64 (glibc) | [bin/linux-x86_64/kokura-cli](bin/linux-x86_64/kokura-cli) |
+| macOS ARM64 | [bin/macos-arm64/kokura-cli](bin/macos-arm64/kokura-cli) |
+| macOS Intel | [bin/macos-x86_64/kokura-cli](bin/macos-x86_64/kokura-cli) |
+
+```sh
+chmod +x bin/linux-x86_64/kokura-cli
+./bin/linux-x86_64/kokura-cli --help
+
+chmod +x bin/macos-arm64/kokura-cli
+./bin/macos-arm64/kokura-cli --help
+
+chmod +x bin/macos-x86_64/kokura-cli
+./bin/macos-x86_64/kokura-cli --help
+```
+
+コマンドはリポジトリ直下で実行します。再配布時はLICENSE、LICENSE.ja、BINARY_NOTICES.md、licenses/も保持してください。
+
+### 最初の使い方
+
+```powershell
+.\kokura-cli.exe game.gb --run-frames 120 --png screen.png
+```
+
 
 ### ビルドと初回利用
 
@@ -120,61 +152,3 @@ DMG/CGBの出力フィルタを修正しました。[音源精度の変更点と
 - [ライセンス英語原文](LICENSE) / [日本語参考訳](LICENSE.ja)
 
 プロジェクトのライセンスは、第三者の依存ライブラリ、ロゴ、商標に関する条件を置き換えるものではありません。再配布時は付属の権利表記も保持してください。
-
-### 公開パッケージの範囲
-
-今回の公開にはエミュレータのコア、CLI、連携APIを含めています。GUIと依存先のPLITAは公開を延期しており、このリポジトリの公開版には含めていません。
-
-### GUIの開発方針
-
-KOKURA-GUIとKUROSAKI-GUIは未公開です。今後のGUI開発にはPLITAを使用し、SDL-GUIとegui-GUIは使用しません。このリポジトリでは引き続きコア、CLI、連携APIを配布します。
-
-
-<!-- native-platform-binaries-20261004-en -->
-### Prebuilt Linux and macOS CLI
-
-Native CLI files verified in GitHub Actions are available in the folders below. Rust, Python and .NET are not required to run the CLI. The Linux build targets x86_64/glibc; choose the matching CPU for macOS.
-
-| OS / CPU | CLI |
-| --- | --- |
-| Linux x86_64 (glibc) | [bin/linux-x86_64/kokura-cli](bin/linux-x86_64/kokura-cli) |
-| macOS ARM64 | [bin/macos-arm64/kokura-cli](bin/macos-arm64/kokura-cli) |
-| macOS Intel | [bin/macos-x86_64/kokura-cli](bin/macos-x86_64/kokura-cli) |
-
-```sh
-chmod +x bin/linux-x86_64/kokura-cli
-./bin/linux-x86_64/kokura-cli --help
-
-chmod +x bin/macos-arm64/kokura-cli
-./bin/macos-arm64/kokura-cli --help
-
-chmod +x bin/macos-x86_64/kokura-cli
-./bin/macos-x86_64/kokura-cli --help
-```
-
-Run the commands from the repository root. For redistribution, retain LICENSE, LICENSE.ja, BINARY_NOTICES.md and licenses/. NATIVE_BINARIES.json records hashes, dependencies, source revisions and native execution checks.
-
-
-<!-- native-platform-binaries-20261004-ja -->
-### ビルド済みLinux・macOS CLI
-
-GitHub Actionsで実行検証したCLIを下記フォルダに配置しています。CLIの実行にRust・Python・.NETは不要です。Linux版はx86_64/glibc向けです。macOSではCPUに合う版を選んでください。
-
-| OS / CPU | CLI |
-| --- | --- |
-| Linux x86_64 (glibc) | [bin/linux-x86_64/kokura-cli](bin/linux-x86_64/kokura-cli) |
-| macOS ARM64 | [bin/macos-arm64/kokura-cli](bin/macos-arm64/kokura-cli) |
-| macOS Intel | [bin/macos-x86_64/kokura-cli](bin/macos-x86_64/kokura-cli) |
-
-```sh
-chmod +x bin/linux-x86_64/kokura-cli
-./bin/linux-x86_64/kokura-cli --help
-
-chmod +x bin/macos-arm64/kokura-cli
-./bin/macos-arm64/kokura-cli --help
-
-chmod +x bin/macos-x86_64/kokura-cli
-./bin/macos-x86_64/kokura-cli --help
-```
-
-コマンドはリポジトリ直下で実行します。再配布時はLICENSE、LICENSE.ja、BINARY_NOTICES.md、licenses/も保持してください。NATIVE_BINARIES.jsonにハッシュ、依存物、ソースのリビジョン、ネイティブ実行検証の記録があります。

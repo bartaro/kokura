@@ -1,10 +1,6 @@
 # KOKURA
 
-[2026-11-14 source update / 最新ソースの変更点](APU_ACCURACY.md) · [Verification / 検証](SOURCE_UPDATE_20261114.md). [Native binaries updated 2026-11-15 / 配布バイナリ更新](bin/README.md): Windows x86_64, Linux x86_64, macOS Apple Silicon / Intel. All four include this APU update.
-
-<!-- readme-language-links:start -->
-[English](README.md#english) | [日本語](README.md#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | **Français** | [Español](README.es.md) | [Deutsch](README.de.md)
-<!-- readme-language-links:end -->
+[English](README.md#english) | [日本語](README.md#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | **Français** | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [Deutsch](README.de.md)
 
 **[KOKURA · Manuel HTML](https://bartaro.github.io/kitaq-docs/fr/kokura.html)**
 
@@ -20,33 +16,13 @@ La racine du dépôt contient `kokura-cli.exe`, compilé en mode Release pour Wi
 .\kokura-cli.exe --help
 ```
 
-Pour reconstruire cet outil seul, utilisez `.\scripts\build.ps1`, avec l'option `-Offline` au besoin. Le script copie l'exécutable à la racine du dépôt. Les interfaces graphiques, modules d'extension Python et DLL de l'API C ne font pas partie de cette distribution d'exécutables. Consultez le [compte rendu de compilation binaire](BINARY_BUILD.json) et les [mentions relatives aux dépendances de l'exécutable](BINARY_NOTICES.md).
+Pour reconstruire cet outil seul, utilisez `.\scripts\build.ps1`, avec l'option `-Offline` au besoin. Le script copie l'exécutable à la racine du dépôt. Les interfaces graphiques, modules d'extension Python et DLL de l'API C ne font pas partie de cette distribution d'exécutables. Consultez les [mentions relatives aux dépendances de l'exécutable](BINARY_NOTICES.md).
 
 Le code propre au projet est proposé sous licence MIT par **DAISUKE OBA**. Lors d'une redistribution, joignez `LICENSE`, `LICENSE.ja`, `BINARY_NOTICES.md` et le dossier `licenses/`. Les bibliothèques tierces conservent leurs propres titulaires de droits et conditions.
 
-## Compiler et commencer à utiliser l'outil
+## CLI précompilées pour Linux et macOS
 
-Pour recompiler, utilisez une version stable actuelle de Rust. Sous Windows, installez Visual Studio Build Tools avec la charge de travail de développement Desktop en C++.
-
-```powershell
-.\scripts\build.ps1
-.\kokura-cli.exe --help
-```
-
-## Manuels et licences
-
-- [KOKURA · Manuel HTML](https://bartaro.github.io/kitaq-docs/fr/kokura.html)
-- [Manuel en anglais](https://bartaro.github.io/kitaq-docs/en/kokura.html) / [Manuel en japonais](https://bartaro.github.io/kitaq-docs/kokura.html)
-- [Sources du manuel pour lecture hors connexion](https://github.com/bartaro/kitaq-docs)
-- [Licence](LICENSE) / [Traduction japonaise à titre de référence](LICENSE.ja)
-
-La licence du projet ne remplace pas les conditions des tiers relatives aux dépendances, logos ou marques. Conservez les mentions jointes lors de la redistribution.
-
-
-<!-- native-platform-binaries-20261004-fr -->
-### CLI précompilées pour Linux et macOS
-
-Les CLI dont l’exécution a été vérifiée dans GitHub Actions se trouvent dans les dossiers ci-dessous. Leur exécution ne nécessite ni Rust, ni Python, ni .NET. La version Linux cible x86_64/glibc ; sous macOS, choisissez la version correspondant au processeur.
+Leur exécution ne nécessite ni Rust, ni Python, ni .NET. La version Linux cible x86_64/glibc ; sous macOS, choisissez la version correspondant au processeur.
 
 | OS / CPU | CLI |
 | --- | --- |
@@ -65,4 +41,29 @@ chmod +x bin/macos-x86_64/kokura-cli
 ./bin/macos-x86_64/kokura-cli --help
 ```
 
-Exécutez les commandes à la racine du dépôt. Pour redistribuer les fichiers, conservez LICENSE, LICENSE.ja, BINARY_NOTICES.md et licenses/. NATIVE_BINARIES.json contient les empreintes, les dépendances, les révisions du code source et les résultats des vérifications natives.
+Exécutez les commandes à la racine du dépôt. Pour redistribuer les fichiers, conservez LICENSE, LICENSE.ja, BINARY_NOTICES.md et licenses/.
+
+## Première utilisation
+
+```powershell
+.\kokura-cli.exe game.gb --run-frames 120 --png screen.png
+```
+
+
+## Compiler et commencer à utiliser l'outil
+
+Pour recompiler, utilisez une version stable actuelle de Rust. Sous Windows, installez Visual Studio Build Tools avec la charge de travail de développement Desktop en C++.
+
+```powershell
+.\scripts\build.ps1
+.\kokura-cli.exe --help
+```
+
+## Manuels et licences
+
+- [KOKURA · Manuel HTML](https://bartaro.github.io/kitaq-docs/fr/kokura.html)
+- [Manuel en anglais](https://bartaro.github.io/kitaq-docs/en/kokura.html) / [Manuel en japonais](https://bartaro.github.io/kitaq-docs/kokura.html)
+- [Sources du manuel pour lecture hors connexion](https://github.com/bartaro/kitaq-docs)
+- [Licence](LICENSE) / [Traduction japonaise à titre de référence](LICENSE.ja)
+
+La licence du projet ne remplace pas les conditions des tiers relatives aux dépendances, logos ou marques. Conservez les mentions jointes lors de la redistribution.
